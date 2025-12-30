@@ -112,13 +112,17 @@ GuiDocument::GuiDocument(const DocumentPtr& doc, GuiApplication* guiApp)
 #endif
 
     //m_v3dView->SetShadingModel(Graphic3d_TypeOfShadingModel_Pbr);
-    // 3D view - Enable anti-aliasing with MSAA
-    m_v3dView->ChangeRenderingParams().IsAntialiasingEnabled = true;
-    m_v3dView->ChangeRenderingParams().NbMsaaSamples = 4;
+    // 3D view - Configure stats
     m_v3dView->ChangeRenderingParams().CollectedStats = Graphic3d_RenderingParams::PerfCounters_Extended;
     m_v3dView->ChangeRenderingParams().StatsPosition = new Graphic3d_TransformPers(
         Graphic3d_TMF_2d, Aspect_TOTP_RIGHT_UPPER, Graphic3d_Vec2i(20, 20)
     );
+    // 3D view - Enable anti-aliasing with MSAA
+    if (m_gfxScene.v3dViewer()->Driver()->InquireLimit(Graphic3d_TypeOfLimit_MaxMsaa) > 0) {
+        m_v3dView->ChangeRenderingParams().IsAntialiasingEnabled = true;
+        m_v3dView->ChangeRenderingParams().NbMsaaSamples = 4;
+    }
+
     // 3D view - Set gradient background
     m_v3dView->SetBgGradientColors(
         GuiDocument::defaultGradientBackground().color1,
