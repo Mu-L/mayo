@@ -32,8 +32,10 @@ TopoDS_Compound BRepUtils::makeEmptyCompound()
 
 void BRepUtils::addShape(TopoDS_Shape* ptrTargetShape, const TopoDS_Shape& shape)
 {
-    TopoDS_Builder builder;
-    builder.Add(*ptrTargetShape, shape);
+    if (!shape.IsNull()) {
+        TopoDS_Builder builder;
+        builder.Add(*ptrTargetShape, shape);
+    }
 }
 
 TopoDS_Edge BRepUtils::makeEdge(const OccHandle<Poly_Polygon3D>& polygon)
