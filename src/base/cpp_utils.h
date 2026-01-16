@@ -78,6 +78,12 @@ void throwErrorIf(bool condition, ErrorArgs... args);
 // Same as static_cast<R>(t) but throws exception if 't' does not fit inside type 'R'
 template<typename R, typename T> constexpr R safeStaticCast(T t);
 
+// Helper type for the visitor type in std::visit()
+template<class... Ts> struct Overloaded : Ts... { using Ts::operator()...; };
+// Explicit deduction guide(not needed as of C++20)
+template<class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
+
+
 } // namespace CppUtils
 
 // --
