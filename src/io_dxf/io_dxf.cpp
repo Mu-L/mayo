@@ -442,6 +442,11 @@ TDF_LabelSequence DxfReader::transfer(DocumentPtr doc, TaskProgress* progress)
     if (m_params.groupLayers) {
         std::unordered_map<const Dxf_LAYER*, TopoDS_Shape> mapShapeByLayer;
         for (const Dxf_EntityVariant& entityVar : m_internal->allEntities()) {
+#if 0
+            std::cout << "transfer() ith: " << Span_itemIndex(m_internal->allEntities(), entityVar)
+                      << " " << getEntityName(entityVar)
+                      << std::endl;
+#endif
             const TopoDS_Shape entityShape = m_internal->createEntityShape(entityVar);
             if (entityShape.IsNull())
                 continue; // Skip
@@ -984,7 +989,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_LWPOLYLINE& polyline)
             OccHandle<Geom_TrimmedCurve> arc = makeArcFromBulge(p0, p1, v0.bulge, normal);
             if (!arc.IsNull())
                 wireBuilder.Add(BRepBuilderAPI_MakeEdge(arc));
-            else
+            else if (gp_Vec{p0, p1}.SquareMagnitude() > Precision::SquareConfusion())
                 wireBuilder.Add(BRepBuilderAPI_MakeEdge(p0, p1));
         }
     }

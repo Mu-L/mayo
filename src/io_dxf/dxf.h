@@ -12,6 +12,7 @@
 #include "dxf_format_header.h"
 #include "dxf_format_tables.h"
 
+#include <deque>
 #include <functional>
 #include <istream>
 #include <iosfwd>
@@ -108,21 +109,6 @@ private:
     void ReportError_readInteger(const char* context);
 
 private:
-    template<typename T, size_t PoolCapacity = 512>
-    struct Storage {
-        T& add(const T& object);
-        T& add(T&& object);
-        const T& back() const;
-        void clear();
-
-    private:
-        template<typename U>
-        T& impl_add(U&& object);
-
-        using Pool = std::vector<T>;
-        std::list<Pool> m_pools;
-    };
-
     bool readEntity(
         const std::function<void()>& fnEntityHandler,
         const std::function<void(int)>& fnCodeHandler,
@@ -130,7 +116,7 @@ private:
     );
 
     template<typename EntityValue, typename Entity>
-    void addEntity(Entity&& entity, Storage<EntityValue>& entityStore);
+    void addEntity(Entity&& entity, std::deque<EntityValue>& entityStore);
 
     // Version from $ACADVER variable in DXF
     DxfVersion m_version = DxfVersion::RUnknown;
@@ -139,27 +125,27 @@ private:
 
     Mayo::StringCache m_strCache;
 
-    Storage<Dxf_POINT> m_points;
-    Storage<Dxf_ARC> m_arcs;
-    Storage<Dxf_CIRCLE> m_circles;
-    Storage<Dxf_ELLIPSE> m_ellipses;
-    Storage<Dxf_TEXT> m_texts;
-    Storage<Dxf_MTEXT> m_mtexts;
-    Storage<Dxf_LINE> m_lines;
-    Storage<Dxf_LWPOLYLINE> m_lwpolylines;
-    Storage<Dxf_POLYLINE> m_polylines;
-    Storage<Dxf_INSERT> m_inserts;
-    Storage<Dxf_3DFACE> m_3dfaces;
-    Storage<Dxf_SOLID> m_solids;
-    Storage<Dxf_SPLINE> m_splines;
+    std::deque<Dxf_POINT> m_points;
+    std::deque<Dxf_ARC> m_arcs;
+    std::deque<Dxf_CIRCLE> m_circles;
+    std::deque<Dxf_ELLIPSE> m_ellipses;
+    std::deque<Dxf_TEXT> m_texts;
+    std::deque<Dxf_MTEXT> m_mtexts;
+    std::deque<Dxf_LINE> m_lines;
+    std::deque<Dxf_LWPOLYLINE> m_lwpolylines;
+    std::deque<Dxf_POLYLINE> m_polylines;
+    std::deque<Dxf_INSERT> m_inserts;
+    std::deque<Dxf_3DFACE> m_3dfaces;
+    std::deque<Dxf_SOLID> m_solids;
+    std::deque<Dxf_SPLINE> m_splines;
     std::vector<Dxf_EntityVariant> m_entities;
 
     std::unordered_map<std::string, std::function<bool()>> m_mapEntityHandler;
 
     Dxf_BLOCK* m_currentBlock = nullptr;
-    Storage<Dxf_BLOCK> m_blocks;
-    Storage<Dxf_STYLE> m_styles;
-    Storage<Dxf_LAYER> m_layers;
+    std::deque<Dxf_BLOCK> m_blocks;
+    std::deque<Dxf_STYLE> m_styles;
+    std::deque<Dxf_LAYER> m_layers;
     std::unordered_map<DxfStringRef, const Dxf_BLOCK*> m_mapBlock;
     std::unordered_map<DxfStringRef, const Dxf_STYLE*> m_mapStyle;
     std::unordered_map<DxfStringRef, const Dxf_LAYER*> m_mapLayer;
@@ -216,52 +202,13 @@ void CDxfRead::handleVectorCoordCode(int n, std::vector<DxfCoords>* ptrVecCoords
 }
 
 template<typename EntityValue, typename Entity>
-void CDxfRead::addEntity(Entity&& entity, Storage<EntityValue>& entityStore)
+void CDxfRead::addEntity(Entity&& entity, std::deque<EntityValue>& entityStore)
 {
     static_assert(std::is_constructible_v<EntityValue, Entity&&>);
-    const auto& entityStored = entityStore.add(std::forward<Entity>(entity));
+    entityStore.push_back(std::forward<Entity>(entity));
+    const auto& entityStored = entityStore.back();
     if (m_currentBlock)
         m_currentBlock->entities.push_back(std::cref(entityStored));
     else
         m_entities.push_back(std::cref(entityStored));
-}
-
-template<typename T, size_t PoolCapacity>
-T& CDxfRead::Storage<T, PoolCapacity>::add(const T& object)
-{
-    return impl_add(object);
-}
-
-template<typename T, size_t PoolCapacity>
-T& CDxfRead::Storage<T, PoolCapacity>::add(T&& object)
-{
-    return impl_add(std::move(object));
-}
-
-template<typename T, size_t PoolCapacity>
-const T& CDxfRead::Storage<T, PoolCapacity>::back() const
-{
-    const Pool& lastPool = m_pools.back();
-    return lastPool.back();
-}
-
-template<typename T, size_t PoolCapacity>
-void CDxfRead::Storage<T, PoolCapacity>::clear()
-{
-    return m_pools.clear();
-}
-
-template<typename T, size_t PoolCapacity>
-template<typename U>
-T& CDxfRead::Storage<T, PoolCapacity>::impl_add(U&& object)
-{
-    if (m_pools.empty() || m_pools.back().capacity() == m_pools.back().size()) {
-        Pool pool;
-        pool.reserve(PoolCapacity);
-        m_pools.push_back(std::move(pool));
-    }
-
-    Pool& pool = m_pools.back();
-    pool.emplace_back(std::forward<U>(object));
-    return pool.back();
 }

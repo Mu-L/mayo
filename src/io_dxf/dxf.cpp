@@ -1030,7 +1030,7 @@ bool CDxfRead::ReadBlock()
     auto _ = gsl::finally([=]{ m_currentBlock = nullptr; });
     auto endBlockHandled = [&]{
         if (m_str == "ENDBLK") {
-            m_blocks.add(std::move(block));
+            m_blocks.push_back(std::move(block));
             m_mapBlock.insert({m_blocks.back().name, &m_blocks.back()});
             return true;
         }
@@ -1155,7 +1155,7 @@ bool CDxfRead::ReadLayer()
                 return false;
             }
 
-            m_layers.add(std::move(layer));
+            m_layers.push_back(std::move(layer));
             m_mapLayer.insert({m_layers.back().name, &m_layers.back()});
             return true;
         }
@@ -1198,7 +1198,7 @@ bool CDxfRead::ReadStyle()
                 return false;
             }
 
-            m_styles.add(std::move(style));
+            m_styles.push_back(std::move(style));
             m_mapStyle.insert({m_styles.back().name, &m_styles.back()});
             return true;
         }
