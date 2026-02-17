@@ -33,11 +33,13 @@
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRep_Builder.hxx>
 #include <BSplCLib.hxx>
+#include <ElCLib.hxx>
 #include <Font_BRepTextBuilder.hxx>
 #include <Font_FontMgr.hxx>
 #include <GeomAPI_Interpolate.hxx>
 #include <Geom_BezierCurve.hxx>
 #include <Geom_BSplineCurve.hxx>
+#include <Geom_Circle.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <Graphic3d_HorizontalTextAlignment.hxx>
 #include <Graphic3d_VerticalTextAlignment.hxx>
@@ -135,19 +137,19 @@ struct Placement {
 
 Frame makeOcsFrame(const gp_Dir& w)
 {
-    // Choisir un a non colinéaire à w (45° ~ 0.70710678)
+    // Choose 'a' non-colinear with 'w'(45° ~ 0.70710678)
     gp_Dir a = (std::abs(w.Z()) < 0.7071067811865476) ? gp::DZ() : gp::DX();
 
-    // Projection de a dans le plan orthogonal à w : uvec = a - (a·w) w
+    // Project 'a' in the perpendicular plane to 'w' : uvec = a - (a·w) w
     gp_Vec uvec = gp_Vec(a) - gp_Vec(w) * (a.Dot(w));
     if (uvec.SquareMagnitude() <= Precision::SquareConfusion()) {
-        // a ≈ colinéaire à w → essayer un autre a
+        // a ≈ colinear to w → try with another 'a'
         a = gp::DY();
         uvec = gp_Vec(a) - gp_Vec(w) * (a.Dot(w));
     }
 
-    const gp_Dir u{uvec};                  // normalisation implicite de gp_Dir
-    const gp_Dir v{gp_Vec(w) ^ gp_Vec(u)}; // repère droit : v = w × u
+    const gp_Dir u{uvec};
+    const gp_Dir v{gp_Vec(w) ^ gp_Vec(u)};
     return {u, v, w};
 }
 
@@ -943,21 +945,45 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_LWPOLYLINE& polyline)
             const gp_Pnt& p0, const gp_Pnt& p1, double bulge, const gp_Dir& planeNormal
         ) -> OccHandle<Geom_TrimmedCurve>
     {
-        gp_Vec chord(p0, p1);
+        // Chord
+        const gp_Vec chord(p0, p1);
         const double c = chord.Magnitude();
         if (c <= gp::Resolution() || MathUtils::fuzzyIsNull(bulge))
             return {};
 
-        gp_Vec p = gp_Vec{planeNormal} ^ chord.Normalized(); // normal × chord
-        if (p.SquareMagnitude() <= Precision::SquareConfusion())
+        // Chord direction and perpendicular vec in the plane
+        const gp_Vec d = chord / c;
+        gp_Vec perp = gp_Vec{planeNormal} ^ d; // n × chordDir
+        if (perp.SquareMagnitude() <= Precision::SquareConfusion())
             return {};
 
-        p.Normalize();
+        perp.Normalize();
 
-        // Sagitta s = (bulge * c) / 2
-        const double s = (bulge * c) * 0.5;
-        const gp_Pnt m = p0.Translated(chord * 0.5);
-        return GC_MakeArcOfCircle(p0, m.Translated(p * s), p1);
+        // Signed angle and geom parameters
+        const double theta = 4.0 * std::atan(bulge); // CCW>0, CW<0
+
+        // Radius and offset center from middle of the chord
+        const double sinHalf = std::sin(0.5 * theta);
+        const double tanHalf = std::tan(0.5 * theta);
+        if (MathUtils::fuzzyIsNull(sinHalf) || MathUtils::fuzzyIsNull(tanHalf))
+            return {};
+
+        const double R = std::abs((0.5 * c) / sinHalf);
+        const double h = (0.5 * c) / tanHalf; // Signed(same as theta)
+
+        // Middle and center
+        const gp_Pnt mid = p0.Translated(d * (0.5 * c));
+        const gp_Pnt center = mid.Translated(perp * h);
+
+        // Circle in the plane, positive radius
+        const gp_Circ circ(gp_Ax2{center, planeNormal}, R);
+
+        // p0 and p1 parameters on the circle
+        const double a0 = ElCLib::Parameter(circ, p0);
+        const double a1 = a0 + theta; // Enforces sense + arc length
+
+        // Trimmed arc
+        return new Geom_TrimmedCurve(makeOccHandle<Geom_Circle>(circ), a0, a1);
     };
 
     const size_t n = polyline.vertices.size();
@@ -992,15 +1018,15 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_LWPOLYLINE& polyline)
     }
 
     if (isClosed) {
-        const auto& vL = polyline.vertices.at(n - 1);
-        const auto& vF = polyline.vertices.at(0);
-        const gp_Pnt p0 = makePolar(vL);
-        const gp_Pnt p1 = makePolar(vF);
+        const auto& vLast = polyline.vertices.at(n - 1);
+        const auto& vFirst = polyline.vertices.at(0);
+        const gp_Pnt p0 = makePolar(vLast);
+        const gp_Pnt p1 = makePolar(vFirst);
 
-        if (MathUtils::fuzzyIsNull(vL.bulge)) {
+        if (MathUtils::fuzzyIsNull(vLast.bulge)) {
             wireBuilder.Add(BRepBuilderAPI_MakeEdge(p0, p1));
         } else {
-            OccHandle<Geom_TrimmedCurve> arc = makeArcFromBulge(p0, p1, vL.bulge, normal);
+            OccHandle<Geom_TrimmedCurve> arc = makeArcFromBulge(p0, p1, vLast.bulge, normal);
             if (arc)
                 wireBuilder.Add(BRepBuilderAPI_MakeEdge(arc));
             else
