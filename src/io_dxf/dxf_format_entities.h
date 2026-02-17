@@ -96,7 +96,7 @@ struct Dxf_MTEXT : public Dxf_BaseGeom2dEntity {
     // Percentage of default(3-on-5) line spacing to be applied. Valid values range from 0.25 to 4.0
     double lineSpacingFactor = 1.;
     // Code 50
-    double rotationAngle = 0.; // radians(AutoCad documentation)
+    double rotationAngle = 0.; // radians
     // Code 71
     enum class AttachmentPoint {
         TopLeft = 1, TopCenter,    TopRight,

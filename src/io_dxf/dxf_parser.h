@@ -26,10 +26,9 @@
 
 #include "../base/string_cache.h"
 
-class CDxfRead {
+class DxfParser {
 public:
-    CDxfRead();
-    virtual ~CDxfRead();
+    DxfParser();
 
     bool failed() const { return m_fail; }
 
@@ -38,24 +37,25 @@ public:
     bool hasHeaderVariable(std::string_view name) const;
     Dxf_HeaderVariableValue headerVariableValue(std::string_view name) const;
 
+    std::string_view codePage() const { return m_codePage; }
+
     const Dxf_BLOCK* findBlock(DxfStringRef name) const;
     const Dxf_LAYER* findLayer(DxfStringRef name) const;
     const Dxf_STYLE* findStyle(DxfStringRef name) const;
 
-    void read(std::istream& stream);
+    void parse(std::istream& stream);
+
+    // NOTE std::getline() doesn't affect std::istream::gcount
+    void setGetLinePostCallback(std::function<void(size_t)> fn);
+    void setReportErrorCallback(std::function<void(std::string_view)> fn);
 
     gsl::span<const Dxf_EntityVariant> allEntities() const { return m_entities; }
 
-protected:
-    std::streamsize gcount() const;
-    virtual void getLine();
-    virtual void ReportError(const std::string& /*msg*/) {}
-
-    virtual bool setSourceEncoding(const std::string& /*codepage*/) { return true; }
-    virtual std::string toUtf8(const std::string& strSource) { return strSource; }
-
 private:
     std::istream& inputStream();
+    void getLine();
+
+    void reportError(std::string_view msg);
 
     std::istream* m_inputStream = nullptr;
 
@@ -65,35 +65,33 @@ private:
     DxfUnit m_unit = DxfUnit::Millimeters;
     bool m_measurement_inch = false;
 
-    std::streamsize m_gcount = 0;
-
     void resolveAcadVer(DxfStringRef strVersion);
     void resolveEncoding(DxfVersion version);
 
-    bool ReadLayer();
-    bool ReadStyle();
-    bool ReadLine();
-    bool ReadMText();
-    bool ReadText();
-    bool ReadArc();
-    bool ReadCircle();
-    bool ReadEllipse();
-    bool ReadPoint();
-    bool ReadSpline();
-    bool ReadLwPolyLine();
-    bool ReadPolyLine();
-    bool ReadVertex(Dxf_POLYLINE::Vertex* vertex);
-    bool Read3dFace();
-    bool ReadSolid();
-    bool ReadSection();
-    bool ReadTable();
-    bool ReadEndSec();
+    bool parseLayer();
+    bool parseStyle();
+    bool parseLine();
+    bool parseMText();
+    bool parseText();
+    bool parseArc();
+    bool parseCircle();
+    bool parseEllipse();
+    bool parsePoint();
+    bool parseSpline();
+    bool parseLwPolyLine();
+    bool parsePolyLine();
+    bool parseVertex(Dxf_POLYLINE::Vertex* vertex);
+    bool parse3dFace();
+    bool parseSolid();
+    bool parseSection();
+    bool parseTable();
+    bool parseEndSec();
 
-    bool ReadInsert();
-    bool ReadDimension();
-    bool ReadBlock();
+    bool parseInsert();
+    bool parseDimension();
+    bool parseBlock();
 
-    void readHeaderVariable();
+    void parseHeaderVariable();
 
     template<unsigned XCode = 10, unsigned YCode = 20, unsigned ZCode = 30>
     void handleCoordCode(int n, DxfCoords* coords);
@@ -106,10 +104,10 @@ private:
 
     void putLine(const std::string& value);
 
-    void ReportError_readInteger(const char* context);
+    void reportError_readInteger(std::string_view context);
 
 private:
-    bool readEntity(
+    bool parseEntity(
         const std::function<void()>& fnEntityHandler,
         const std::function<void(int)>& fnCodeHandler,
         std::string_view entityTypeName
@@ -122,6 +120,9 @@ private:
     DxfVersion m_version = DxfVersion::RUnknown;
     // Code Page name from $DWGCODEPAGE or null if none/not read yet
     std::string m_codePage;
+
+    std::function<void(size_t)> m_getLinePostCallback;
+    std::function<void(std::string_view)> m_reportErrorCallback;
 
     Mayo::StringCache m_strCache;
 
@@ -177,7 +178,7 @@ unsigned stringToUnsigned(
 } // namespace DxfPrivate
 
 template<unsigned XCode, unsigned YCode, unsigned ZCode>
-void CDxfRead::handleCoordCode(int n, DxfCoords* coords)
+void DxfParser::handleCoordCode(int n, DxfCoords* coords)
 {
     switch (n) {
     case XCode:
@@ -193,7 +194,7 @@ void CDxfRead::handleCoordCode(int n, DxfCoords* coords)
 }
 
 template<unsigned XCode, unsigned YCode, unsigned ZCode>
-void CDxfRead::handleVectorCoordCode(int n, std::vector<DxfCoords>* ptrVecCoords)
+void DxfParser::handleVectorCoordCode(int n, std::vector<DxfCoords>* ptrVecCoords)
 {
     if (n == XCode || ptrVecCoords->empty())
         ptrVecCoords->push_back({});
@@ -202,7 +203,7 @@ void CDxfRead::handleVectorCoordCode(int n, std::vector<DxfCoords>* ptrVecCoords
 }
 
 template<typename EntityValue, typename Entity>
-void CDxfRead::addEntity(Entity&& entity, std::deque<EntityValue>& entityStore)
+void DxfParser::addEntity(Entity&& entity, std::deque<EntityValue>& entityStore)
 {
     static_assert(std::is_constructible_v<EntityValue, Entity&&>);
     entityStore.push_back(std::forward<Entity>(entity));

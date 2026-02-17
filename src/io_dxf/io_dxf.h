@@ -23,7 +23,6 @@ public:
     TDF_LabelSequence transfer(DocumentPtr doc, TaskProgress* progress) override;
 
     struct Parameters {
-        double scaling = 1.;
         bool importAnnotations = true;
         bool groupLayers = true;
         std::string fontNameForTextObjects = "Arial";
@@ -36,14 +35,14 @@ public:
 
 private:
     class Properties;
-    class Internal;
+    class ReaderImpl;
 
     struct Entity {
         int aci = 0;
         TopoDS_Shape shape;
     };
     Parameters m_params;
-    Internal* m_internal = nullptr;
+    ReaderImpl* m_impl = nullptr;
 };
 
 // Provides factory to create DxfReader objects

@@ -20,7 +20,7 @@
 #include <iomanip>
 #include <stdexcept>
 
-#include "dxf.h"
+#include "dxf_parser.h"
 
 #include <iostream>
 #include <sstream>
@@ -135,35 +135,31 @@ double stringToDouble(const std::string& line, StringToErrorMode errorMode)
 
 using namespace DxfPrivate;
 
-CDxfRead::CDxfRead()
+DxfParser::DxfParser()
 {
-    m_mapEntityHandler.insert({ "ARC", [=]{ return ReadArc(); } });
-    m_mapEntityHandler.insert({ "BLOCK", [=]{ return ReadBlock(); } });
-    m_mapEntityHandler.insert({ "CIRCLE", [=]{ return ReadCircle(); } });
-    m_mapEntityHandler.insert({ "DIMENSION", [=]{ return ReadDimension(); } });
-    m_mapEntityHandler.insert({ "ELLIPSE", [=]{ return ReadEllipse(); } });
-    m_mapEntityHandler.insert({ "INSERT", [=]{ return ReadInsert(); } });
-    m_mapEntityHandler.insert({ "LAYER", [=]{ return ReadLayer(); } });
-    m_mapEntityHandler.insert({ "LINE", [=]{ return ReadLine(); } });
-    m_mapEntityHandler.insert({ "LWPOLYLINE", [=]{ return ReadLwPolyLine(); } });
-    m_mapEntityHandler.insert({ "MTEXT", [=]{ return ReadMText(); } });
-    m_mapEntityHandler.insert({ "POINT", [=]{ return ReadPoint(); } });
-    m_mapEntityHandler.insert({ "POLYLINE", [=]{ return ReadPolyLine(); } });
-    m_mapEntityHandler.insert({ "SECTION", [=]{ return ReadSection(); } });
-    m_mapEntityHandler.insert({ "SOLID", [=]{ return ReadSolid(); } });
-    m_mapEntityHandler.insert({ "3DFACE", [=]{ return Read3dFace(); } });
-    m_mapEntityHandler.insert({ "SPLINE", [=]{ return ReadSpline(); } });
-    m_mapEntityHandler.insert({ "STYLE", [=]{ return ReadStyle(); } });
-    m_mapEntityHandler.insert({ "TEXT", [=]{ return ReadText(); } });
-    m_mapEntityHandler.insert({ "TABLE", [=]{ return ReadTable(); } });
-    m_mapEntityHandler.insert({ "ENDSEC", [=]{ return ReadEndSec(); } });
+    m_mapEntityHandler.insert({ "ARC", [=]{ return parseArc(); } });
+    m_mapEntityHandler.insert({ "BLOCK", [=]{ return parseBlock(); } });
+    m_mapEntityHandler.insert({ "CIRCLE", [=]{ return parseCircle(); } });
+    m_mapEntityHandler.insert({ "DIMENSION", [=]{ return parseDimension(); } });
+    m_mapEntityHandler.insert({ "ELLIPSE", [=]{ return parseEllipse(); } });
+    m_mapEntityHandler.insert({ "INSERT", [=]{ return parseInsert(); } });
+    m_mapEntityHandler.insert({ "LAYER", [=]{ return parseLayer(); } });
+    m_mapEntityHandler.insert({ "LINE", [=]{ return parseLine(); } });
+    m_mapEntityHandler.insert({ "LWPOLYLINE", [=]{ return parseLwPolyLine(); } });
+    m_mapEntityHandler.insert({ "MTEXT", [=]{ return parseMText(); } });
+    m_mapEntityHandler.insert({ "POINT", [=]{ return parsePoint(); } });
+    m_mapEntityHandler.insert({ "POLYLINE", [=]{ return parsePolyLine(); } });
+    m_mapEntityHandler.insert({ "SECTION", [=]{ return parseSection(); } });
+    m_mapEntityHandler.insert({ "SOLID", [=]{ return parseSolid(); } });
+    m_mapEntityHandler.insert({ "3DFACE", [=]{ return parse3dFace(); } });
+    m_mapEntityHandler.insert({ "SPLINE", [=]{ return parseSpline(); } });
+    m_mapEntityHandler.insert({ "STYLE", [=]{ return parseStyle(); } });
+    m_mapEntityHandler.insert({ "TEXT", [=]{ return parseText(); } });
+    m_mapEntityHandler.insert({ "TABLE", [=]{ return parseTable(); } });
+    m_mapEntityHandler.insert({ "ENDSEC", [=]{ return parseEndSec(); } });
 }
 
-CDxfRead::~CDxfRead()
-{
-}
-
-double CDxfRead::mm(double value) const
+double DxfParser::mm(double value) const
 {
     // re #6461
     // this if handles situation of malformed DXF file where
@@ -222,36 +218,36 @@ double CDxfRead::mm(double value) const
     }
 }
 
-bool CDxfRead::hasHeaderVariable(std::string_view name) const
+bool DxfParser::hasHeaderVariable(std::string_view name) const
 {
     return m_mapHeaderVarValue.find(name) != m_mapHeaderVarValue.cend();
 }
 
-Dxf_HeaderVariableValue CDxfRead::headerVariableValue(std::string_view name) const
+Dxf_HeaderVariableValue DxfParser::headerVariableValue(std::string_view name) const
 {
     auto it = m_mapHeaderVarValue.find(name);
     return it != m_mapHeaderVarValue.cend() ? it->second : Dxf_HeaderVariableValue{};
 }
 
-const Dxf_BLOCK* CDxfRead::findBlock(DxfStringRef name) const
+const Dxf_BLOCK* DxfParser::findBlock(DxfStringRef name) const
 {
     auto it = m_mapBlock.find(name);
     return it != m_mapBlock.cend() ? it->second : nullptr;
 }
 
-const Dxf_LAYER* CDxfRead::findLayer(DxfStringRef name) const
+const Dxf_LAYER* DxfParser::findLayer(DxfStringRef name) const
 {
     auto it = m_mapLayer.find(name);
     return it != m_mapLayer.cend() ? it->second : nullptr;
 }
 
-const Dxf_STYLE* CDxfRead::findStyle(DxfStringRef name) const
+const Dxf_STYLE* DxfParser::findStyle(DxfStringRef name) const
 {
     auto it = m_mapStyle.find(name);
     return it != m_mapStyle.cend() ? it->second : nullptr;
 }
 
-bool CDxfRead::readEntity(
+bool DxfParser::parseEntity(
         const std::function<void()>& fnEntityHandler,
         const std::function<void(int)>& fnCodeHandler,
         std::string_view entityTypeName
@@ -267,10 +263,10 @@ bool CDxfRead::readEntity(
         }
         else if (isStringToErrorValue(n)) {
             std::string context;
-            context += "DXF::Read";
+            context += "DXF::Parse";
             context += entityTypeName;
             context += "()";
-            this->ReportError_readInteger(context.c_str());
+            this->reportError_readInteger(context);
             return false;
         }
 
@@ -282,7 +278,7 @@ bool CDxfRead::readEntity(
     return false;
 }
 
-bool CDxfRead::ReadLine()
+bool DxfParser::parseLine()
 {
     Dxf_LINE line;
     auto fnEntityHandler = [&]{
@@ -301,10 +297,10 @@ bool CDxfRead::ReadLine()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "Line");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Line");
 }
 
-bool CDxfRead::ReadPoint()
+bool DxfParser::parsePoint()
 {
     Dxf_POINT point;
     auto fnEntityHandler = [&]{
@@ -323,10 +319,10 @@ bool CDxfRead::ReadPoint()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "Point");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Point");
 }
 
-bool CDxfRead::ReadArc()
+bool DxfParser::parseArc()
 {
     Dxf_ARC arc;
     auto fnEntityHandler = [&]{
@@ -351,10 +347,10 @@ bool CDxfRead::ReadArc()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "Arc");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Arc");
 }
 
-bool CDxfRead::ReadSpline()
+bool DxfParser::parseSpline()
 {
     int knotCount = 0;
     int controlPointCount = 0;
@@ -418,10 +414,10 @@ bool CDxfRead::ReadSpline()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "Spline");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Spline");
 }
 
-bool CDxfRead::ReadCircle()
+bool DxfParser::parseCircle()
 {
     Dxf_CIRCLE circle;
     auto fnEntityHandler = [&]{
@@ -440,10 +436,10 @@ bool CDxfRead::ReadCircle()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "Circle");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Circle");
 }
 
-bool CDxfRead::ReadMText()
+bool DxfParser::parseMText()
 {
     Dxf_MTEXT text;
     bool withinAcadColumnInfo = false;
@@ -474,7 +470,7 @@ bool CDxfRead::ReadMText()
             pos = strText.find("\\P", pos + 1);
         }
 
-        text.str = m_strCache.add(this->toUtf8(strText));
+        text.str = m_strCache.add(strText);
         this->addEntity(std::move(text), m_mtexts);
     };
     auto fnCodeHandler = [&](int n) {
@@ -593,10 +589,10 @@ bool CDxfRead::ReadMText()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "MText");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "MText");
 }
 
-bool CDxfRead::ReadText()
+bool DxfParser::parseText()
 {
     Dxf_TEXT text;
     auto fnEntityHandler = [&]{
@@ -611,7 +607,7 @@ bool CDxfRead::ReadText()
             text.height = mm(stringToDouble(m_str));
             break;
         case 1:
-            text.str = m_strCache.add(this->toUtf8(m_str));
+            text.str = m_strCache.add(m_str);
             break;
         case 50:
             text.rotationAngle = stringToDouble(m_str);
@@ -651,10 +647,10 @@ bool CDxfRead::ReadText()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "Text");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Text");
 }
 
-bool CDxfRead::ReadEllipse()
+bool DxfParser::parseEllipse()
 {
     Dxf_ELLIPSE ellipse;
     auto fnEntityHandler = [&]{
@@ -682,10 +678,10 @@ bool CDxfRead::ReadEllipse()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "Ellipse");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Ellipse");
 }
 
-bool CDxfRead::ReadLwPolyLine()
+bool DxfParser::parseLwPolyLine()
 {
     Dxf_LWPOLYLINE polyline;
     unsigned declaredSize = 0;
@@ -738,10 +734,10 @@ bool CDxfRead::ReadLwPolyLine()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "LwPolyline");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "LwPolyline");
 }
 
-bool CDxfRead::ReadVertex(Dxf_POLYLINE::Vertex* vertex)
+bool DxfParser::parseVertex(Dxf_POLYLINE::Vertex* vertex)
 {
     bool x_found = false;
     bool y_found = false;
@@ -754,7 +750,7 @@ bool CDxfRead::ReadVertex(Dxf_POLYLINE::Vertex* vertex)
             return x_found && y_found;
         }
         else if (isStringToErrorValue(n)) {
-            this->ReportError_readInteger("DXF::ReadVertex()");
+            this->reportError_readInteger("DXF::parseVertex()");
             return false;
         }
 
@@ -795,7 +791,7 @@ bool CDxfRead::ReadVertex(Dxf_POLYLINE::Vertex* vertex)
     return false;
 }
 
-bool CDxfRead::Read3dFace()
+bool DxfParser::parse3dFace()
 {
     Dxf_3DFACE face;
     auto fnEntityHandler = [&]{
@@ -824,10 +820,10 @@ bool CDxfRead::Read3dFace()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "3DFace");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "3DFace");
 }
 
-bool CDxfRead::ReadSolid()
+bool DxfParser::parseSolid()
 {
     Dxf_SOLID solid;
     auto fnEntityHandler = [&]{
@@ -859,17 +855,17 @@ bool CDxfRead::ReadSolid()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "Solid");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Solid");
 }
 
-bool CDxfRead::ReadPolyLine()
+bool DxfParser::parsePolyLine()
 {
     Dxf_POLYLINE polyline;
     while (!inputStream().eof()) {
         getLine();
         const int n = stringToInt(m_str, StringToErrorMode::ReturnErrorValue);
         if (isStringToErrorValue(n)) {
-            this->ReportError_readInteger("DXF::ReadPolyLine()");
+            this->reportError_readInteger("DXF::parsePolyLine()");
             return false;
         }
 
@@ -878,7 +874,7 @@ bool CDxfRead::ReadPolyLine()
         case 0:
             if (m_str == "VERTEX") {
                 Dxf_POLYLINE::Vertex vertex;
-                if (ReadVertex(&vertex))
+                if (parseVertex(&vertex))
                     polyline.vertices.push_back(std::move(vertex));
             }
             else if (m_str == "SEQEND") {
@@ -920,7 +916,7 @@ bool CDxfRead::ReadPolyLine()
     return false;
 }
 
-bool CDxfRead::ReadInsert()
+bool DxfParser::parseInsert()
 {
     Dxf_INSERT insert;
     auto fnEntityHandler = [&]{
@@ -966,10 +962,10 @@ bool CDxfRead::ReadInsert()
             break;
         }
     };
-    return this->readEntity(fnEntityHandler, fnCodeHandler, "Insert");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Insert");
 }
 
-bool CDxfRead::ReadDimension()
+bool DxfParser::parseDimension()
 {
     DxfCoords s = {}; // startpoint
     DxfCoords e = {}; // endpoint
@@ -981,11 +977,10 @@ bool CDxfRead::ReadDimension()
         const int n = stringToInt(m_str, StringToErrorMode::ReturnErrorValue);
         if (n == 0) {
             // next item found
-            //OnReadDimension(s, e, p, rot * M_PI/180);
             return true;
         }
         else if (isStringToErrorValue(n)) {
-            this->ReportError_readInteger("DXF::ReadDimension()");
+            this->reportError_readInteger("DXF::parseDimension()");
             return false;
         }
 
@@ -1023,7 +1018,7 @@ bool CDxfRead::ReadDimension()
     return false;
 }
 
-bool CDxfRead::ReadBlock()
+bool DxfParser::parseBlock()
 {
     Dxf_BLOCK block;
     m_currentBlock = &block;
@@ -1045,7 +1040,7 @@ bool CDxfRead::ReadBlock()
 
         const int n = stringToInt(m_str, StringToErrorMode::ReturnErrorValue);
         if (isStringToErrorValue(n)) {
-            this->ReportError_readInteger("DXF::ReadBlock()");
+            this->reportError_readInteger("DXF::parseBlock()");
             return false;
         }
 
@@ -1056,11 +1051,11 @@ bool CDxfRead::ReadBlock()
                 auto itHandler = m_mapEntityHandler.find(m_str);
                 if (itHandler != m_mapEntityHandler.cend()) {
                     const auto& fnEntityHandler = itHandler->second;
-                    bool okRead = false;
+                    bool okParse = false;
                     try {
-                        okRead = fnEntityHandler();
+                        okParse = fnEntityHandler();
                     } catch (const std::runtime_error& err) {
-                        this->ReportError(err.what());
+                        this->reportError(err.what());
                     }
                 }
 
@@ -1096,26 +1091,26 @@ bool CDxfRead::ReadBlock()
     return false;
 }
 
-bool CDxfRead::ReadSection()
+bool DxfParser::parseSection()
 {
     getLine();
     getLine();
     return true;
 }
 
-bool CDxfRead::ReadTable()
+bool DxfParser::parseTable()
 {
     getLine();
     getLine();
     return true;
 }
 
-bool CDxfRead::ReadEndSec()
+bool DxfParser::parseEndSec()
 {
     return true;
 }
 
-void CDxfRead::getLine()
+void DxfParser::getLine()
 {
     if (!m_unusedLine.empty()) {
         m_str = m_unusedLine;
@@ -1124,7 +1119,7 @@ void CDxfRead::getLine()
     }
 
     std::getline(inputStream(), m_str);
-    m_gcount = m_str.size();
+    const size_t getLineSize = m_str.size();
 
     // Erase leading whitespace characters
     auto itNonSpace = m_str.begin();
@@ -1136,14 +1131,17 @@ void CDxfRead::getLine()
     }
 
     m_str.erase(m_str.begin(), itNonSpace);
+
+    if (m_getLinePostCallback)
+        m_getLinePostCallback(getLineSize);
 }
 
-void CDxfRead::putLine(const std::string& value)
+void DxfParser::putLine(const std::string& value)
 {
     m_unusedLine = value;
 }
 
-bool CDxfRead::ReadLayer()
+bool DxfParser::parseLayer()
 {
     Dxf_LAYER layer;
     while (!inputStream().eof()) {
@@ -1151,7 +1149,7 @@ bool CDxfRead::ReadLayer()
         const int n = stringToInt(m_str, StringToErrorMode::ReturnErrorValue);
         if (n == 0) {
             if (layer.name.empty()) {
-                this->ReportError_readInteger("DXF::ReadLayer() - no layer name");
+                this->reportError_readInteger("DXF::parseLayer() - no layer name");
                 return false;
             }
 
@@ -1160,7 +1158,7 @@ bool CDxfRead::ReadLayer()
             return true;
         }
         else if (isStringToErrorValue(n)) {
-            this->ReportError_readInteger("DXF::ReadLayer()");
+            this->reportError_readInteger("DXF::parseLayer()");
             return false;
         }
 
@@ -1186,7 +1184,7 @@ bool CDxfRead::ReadLayer()
     return false;
 }
 
-bool CDxfRead::ReadStyle()
+bool DxfParser::parseStyle()
 {
     Dxf_STYLE style;
     while (!inputStream().eof()) {
@@ -1194,7 +1192,7 @@ bool CDxfRead::ReadStyle()
         const int n = stringToInt(m_str, StringToErrorMode::ReturnErrorValue);
         if (n == 0) {
             if (style.name.empty()) {
-                this->ReportError_readInteger("DXF::ReadStyle() - no style name");
+                this->reportError_readInteger("DXF::parseStyle() - no style name");
                 return false;
             }
 
@@ -1203,7 +1201,7 @@ bool CDxfRead::ReadStyle()
             return true;
         }
         else if (isStringToErrorValue(n)) {
-            this->ReportError_readInteger("DXF::ReadStyle()");
+            this->reportError_readInteger("DXF::parseStyle()");
             return false;
         }
 
@@ -1235,7 +1233,7 @@ bool CDxfRead::ReadStyle()
     return false;
 }
 
-void CDxfRead::resolveAcadVer(DxfStringRef strVersion)
+void DxfParser::resolveAcadVer(DxfStringRef strVersion)
 {
     static const std::string_view versionNames[] = {
         // This table is indexed by eDXFVersion_t - (ROlder+1)
@@ -1274,14 +1272,14 @@ void CDxfRead::resolveAcadVer(DxfStringRef strVersion)
     this->resolveEncoding(m_version);
 }
 
-void CDxfRead::resolveEncoding(DxfVersion version)
+void DxfParser::resolveEncoding(DxfVersion version)
 {
     //
     // See https://ezdxf.readthedocs.io/en/stable/dxfinternals/fileencoding.html#
     //
 
     if (version >= DxfVersion::R2007) { // Note this does not include RUnknown, but does include RLater
-        this->setSourceEncoding("UTF8");
+        m_codePage = "UTF8";
     }
     else {
         std::transform(m_codePage.cbegin(), m_codePage.cend(), m_codePage.begin(), [](char c) {
@@ -1290,12 +1288,10 @@ void CDxfRead::resolveEncoding(DxfVersion version)
         // ANSI_1252 by default if $DWGCODEPAGE is not set
         if (m_codePage.empty())
             m_codePage = "ANSI_1252";
-
-        this->setSourceEncoding(m_codePage);
     }
 }
 
-void CDxfRead::handleCommonGroupCode(Dxf_BaseEntity* entity, int n)
+void DxfParser::handleCommonGroupCode(Dxf_BaseEntity* entity, int n)
 {
     switch (n) {
     case 5:
@@ -1319,7 +1315,7 @@ void CDxfRead::handleCommonGroupCode(Dxf_BaseEntity* entity, int n)
     }
 }
 
-void CDxfRead::handleCommonGroupCode(Dxf_BaseGeom2dEntity* entity, int n)
+void DxfParser::handleCommonGroupCode(Dxf_BaseGeom2dEntity* entity, int n)
 {
     this->handleCommonGroupCode(static_cast<Dxf_BaseEntity*>(entity), n);
     switch (n) {
@@ -1332,7 +1328,7 @@ void CDxfRead::handleCommonGroupCode(Dxf_BaseGeom2dEntity* entity, int n)
     }
 }
 
-void CDxfRead::readHeaderVariable()
+void DxfParser::parseHeaderVariable()
 {
     assert(!m_str.empty() && m_str.at(0) == '$');
 
@@ -1389,7 +1385,7 @@ void CDxfRead::readHeaderVariable()
     }
 }
 
-void CDxfRead::read(std::istream& stream)
+void DxfParser::parse(std::istream& stream)
 {
     m_inputStream = &stream;
     m_inputStream->imbue(std::locale::classic());
@@ -1422,7 +1418,6 @@ void CDxfRead::read(std::istream& stream)
     m_mapStyle.clear();
     m_mapLayer.clear();
 
-    m_gcount = 0;
     if (m_fail)
         return;
 
@@ -1432,7 +1427,7 @@ void CDxfRead::read(std::istream& stream)
     while (!inputStream().eof()) {
         // Handle header variable
         if (!m_str.empty() && m_str.at(0) == '$')
-            this->readHeaderVariable();
+            this->parseHeaderVariable();
 
         if (m_str == "0") {
             getLine();
@@ -1442,24 +1437,24 @@ void CDxfRead::read(std::istream& stream)
             auto itHandler = m_mapEntityHandler.find(m_str);
             if (itHandler != m_mapEntityHandler.cend()) {
                 const auto& fn = itHandler->second;
-                bool okRead = false;
+                bool okParse = false;
                 std::string exceptionMsg;
                 try {
-                    okRead = fn();
+                    okParse = fn();
                 } catch (const std::runtime_error& err) {
                     exceptionMsg = err.what();
                 }
 
-                if (okRead) {
+                if (okParse) {
                     continue;
                 }
                 else {
                     m_fail = false;
-                    std::string errMsg = "DXF::DoRead() - Failed to read " + m_str;
+                    std::string errMsg = "DXF::parse() - Failed to parse " + m_str;
                     if (!exceptionMsg.empty())
                         errMsg += "\nError: " + exceptionMsg;
 
-                    this->ReportError(errMsg);
+                    this->reportError(errMsg);
                     if (m_str == "LAYER") // Some objects or tables can have "LAYER" as name...
                         continue;
                     else
@@ -1472,10 +1467,26 @@ void CDxfRead::read(std::istream& stream)
     }
 }
 
-void CDxfRead::ReportError_readInteger(const char* context)
+void DxfParser::setGetLinePostCallback(std::function<void(size_t)> fn)
+{
+    m_getLinePostCallback = std::move(fn);
+}
+
+void DxfParser::setReportErrorCallback(std::function<void(std::string_view)> fn)
+{
+    m_reportErrorCallback = std::move(fn);
+}
+
+void DxfParser::reportError(std::string_view msg)
+{
+    if (m_reportErrorCallback)
+        m_reportErrorCallback(msg);
+}
+
+void DxfParser::reportError_readInteger(std::string_view context)
 {
     std::string msg;
-    if (context) {
+    if (!context.empty()) {
         msg += context;
         msg += " - ";
     }
@@ -1483,17 +1494,10 @@ void CDxfRead::ReportError_readInteger(const char* context)
     msg += "Failed to read integer from '";
     msg += m_str;
     msg += "'";
-    this->ReportError(msg);
+    this->reportError(msg);
 }
 
-std::streamsize CDxfRead::gcount() const
-{
-    // std::getline() doesn't affect std::istream::gcount
-    //return m_ifs.gcount();
-    return m_gcount;
-}
-
-std::istream& CDxfRead::inputStream()
+std::istream& DxfParser::inputStream()
 {
     if (m_inputStream) {
         return *m_inputStream;

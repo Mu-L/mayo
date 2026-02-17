@@ -22,7 +22,7 @@
 #include "../base/tkernel_utils.h"
 #include "../base/unit_system.h"
 #include "aci_table.h"
-#include "dxf.h"
+#include "dxf_parser.h"
 
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -256,14 +256,13 @@ gp_Vec ocsVecToWcs(const DxfCoords& vec, const Frame& frame)
 
 } // namespace
 
-class DxfReader::Internal : public CDxfRead {
+class DxfReader::ReaderImpl : public DxfParser {
 public:
-    bool read(const FilePath& filepath, TaskProgress* progress = nullptr);
+    ReaderImpl();
 
+    bool read(const FilePath& filepath, TaskProgress* progress = nullptr);
     void setMessenger(Messenger* messenger) { m_messenger = messenger; }
     void setParameters(const DxfReader::Parameters& params) { m_params = params; }
-
-    void ReportError(const std::string& msg) override;
 
     TopoDS_Shape createEntityShape(const Dxf_EntityVariant& entityVar);
     TopoDS_Shape createBlockShape(const Dxf_BLOCK& block);
@@ -282,20 +281,18 @@ public:
     TopoDS_Shape createShape(const Dxf_SPLINE& spline);
     TopoDS_Shape createShape(const Dxf_TEXT& text);
 
-    static TopoDS_Shape createSplineFromPolesAndKnots(const Dxf_SPLINE& spline);
-    static TopoDS_Shape createInterpolationSpline(const Dxf_SPLINE& spline);
+    std::string toUtf8(const std::string& strSource) const;
 
-    gp_Pnt toPnt(const DxfCoords& coords) const;
     void addShape(const TopoDS_Shape& shape, const Dxf_BaseEntity& srcEntity);
 
     static TopoDS_Face makeFace(const Dxf_QuadBase& quad);
 
-protected:
-    void getLine() override;
-    bool setSourceEncoding(const std::string& codepage) override;
-    std::string toUtf8(const std::string& strSource) override;
-
 private:
+    bool setSourceEncoding(std::string_view codepage);
+
+    static TopoDS_Shape createSplineFromPolesAndKnots(const Dxf_SPLINE& spline);
+    static TopoDS_Shape createInterpolationSpline(const Dxf_SPLINE& spline);
+
     TopoDS_Shape createShapePolygonMesh3d(const Dxf_POLYLINE& polyline);
     TopoDS_Shape createShapePolyfaceMesh(const Dxf_POLYLINE& polyline);
     TopoDS_Shape createShapePolyline3d(const Dxf_POLYLINE& polyline);
@@ -327,25 +324,21 @@ public:
     Properties(PropertyGroup* parentGroup)
         : PropertyGroup(parentGroup)
     {
-        this->scaling.setDescription(
-                    textIdTr("Scale entities according some factor"));
         this->importAnnotations.setDescription(
-                    textIdTr("Import text/dimension objects"));
+            textIdTr("Import text/dimension objects"));
         this->groupLayers.setDescription(
-                    textIdTr("Group all objects within a layer into a single compound shape"));
+            textIdTr("Group all objects within a layer into a single compound shape"));
         this->fontNameForTextObjects.setDescription(
-                    textIdTr("Name of the font to be used when creating shape for text objects"));
+            textIdTr("Name of the font to be used when creating shape for text objects"));
     }
 
     void restoreDefaults() override {
         const DxfReader::Parameters params;
-        this->scaling.setValue(params.scaling);
         this->importAnnotations.setValue(params.importAnnotations);
         this->groupLayers.setValue(params.groupLayers);
         this->fontNameForTextObjects.setValue(0);
     }
 
-    PropertyDouble scaling{ this, textId("scaling") };
     PropertyBool importAnnotations{ this, textId("importAnnotations") };
     PropertyBool groupLayers{ this, textId("groupLayers") };
     PropertyEnumeration fontNameForTextObjects{ this, textId("fontNameForTextObjects"), &systemFontNames() };
@@ -353,16 +346,16 @@ public:
 
 DxfReader::~DxfReader()
 {
-    delete m_internal;
+    delete m_impl;
 }
 
 bool DxfReader::readFile(const FilePath& filepath, TaskProgress* progress)
 {
-    delete m_internal;
-    m_internal = new DxfReader::Internal;
-    m_internal->setParameters(m_params);
-    m_internal->setMessenger(this->messenger() ? this->messenger() : &Messenger::null());
-    return m_internal->read(filepath, progress);
+    delete m_impl;
+    m_impl = new DxfReader::ReaderImpl;
+    m_impl->setParameters(m_params);
+    m_impl->setMessenger(this->messenger() ? this->messenger() : &Messenger::null());
+    return m_impl->read(filepath, progress);
 }
 
 std::string getEntityName(const Dxf_EntityVariant& entityVar)
@@ -401,7 +394,7 @@ DxfStringRef getEntityLayerName(const Dxf_EntityVariant& entityVar)
 
 TDF_LabelSequence DxfReader::transfer(DocumentPtr doc, TaskProgress* progress)
 {
-    if (!m_internal)
+    if (!m_impl)
         return {};
 
     TDF_LabelSequence seqLabel;
@@ -441,18 +434,18 @@ TDF_LabelSequence DxfReader::transfer(DocumentPtr doc, TaskProgress* progress)
 
     if (m_params.groupLayers) {
         std::unordered_map<const Dxf_LAYER*, TopoDS_Shape> mapShapeByLayer;
-        for (const Dxf_EntityVariant& entityVar : m_internal->allEntities()) {
+        for (const Dxf_EntityVariant& entityVar : m_impl->allEntities()) {
 #if 0
-            std::cout << "transfer() ith: " << Span_itemIndex(m_internal->allEntities(), entityVar)
+            std::cout << "transfer() ith: " << Span_itemIndex(m_impl->allEntities(), entityVar)
                       << " " << getEntityName(entityVar)
                       << std::endl;
 #endif
-            const TopoDS_Shape entityShape = m_internal->createEntityShape(entityVar);
+            const TopoDS_Shape entityShape = m_impl->createEntityShape(entityVar);
             if (entityShape.IsNull())
                 continue; // Skip
 
             DxfStringRef layerName = getEntityLayerName(entityVar);
-            const Dxf_LAYER* layer = m_internal->findLayer(layerName);
+            const Dxf_LAYER* layer = m_impl->findLayer(layerName);
             auto it = mapShapeByLayer.find(layer);
             if (it == mapShapeByLayer.cend()) {
                 TopoDS_Shape layerShape = BRepUtils::makeEmptyCompound();
@@ -472,8 +465,8 @@ TDF_LabelSequence DxfReader::transfer(DocumentPtr doc, TaskProgress* progress)
     }
     else {
         std::unordered_map<size_t, unsigned> mapCountByEntityType;
-        for (const Dxf_EntityVariant& entityVar : m_internal->allEntities()) {
-            const TopoDS_Shape entityShape = m_internal->createEntityShape(entityVar);
+        for (const Dxf_EntityVariant& entityVar : m_impl->allEntities()) {
+            const TopoDS_Shape entityShape = m_impl->createEntityShape(entityVar);
             if (entityShape.IsNull())
                 continue; // Skip
 
@@ -513,7 +506,7 @@ TDF_LabelSequence DxfReader::transfer(DocumentPtr doc, TaskProgress* progress)
 
     int iShape = 0;
     int shapeCount = 0;
-    for (const auto& [layerName, vecEntity] : m_internal->layers()) {
+    for (const auto& [layerName, vecEntity] : m_impl->layers()) {
         if (!startsWith(layerName, "BLOCKS")) {
             shapeCount = CppUtils::safeStaticCast<int>(shapeCount + vecEntity.size());
             const TDF_Label layerLabel = layerTool->AddLayer(to_OccExtString(layerName));
@@ -531,7 +524,7 @@ TDF_LabelSequence DxfReader::transfer(DocumentPtr doc, TaskProgress* progress)
     };
 
     if (!m_params.groupLayers) {
-        for (const auto& [layerName, vecEntity] : m_internal->layers()) {
+        for (const auto& [layerName, vecEntity] : m_impl->layers()) {
             if (startsWith(layerName, "BLOCKS"))
                 continue; // Skip
 
@@ -545,7 +538,7 @@ TDF_LabelSequence DxfReader::transfer(DocumentPtr doc, TaskProgress* progress)
         }
     }
     else {
-        for (const auto& [layerName, vecEntity] : m_internal->layers()) {
+        for (const auto& [layerName, vecEntity] : m_impl->layers()) {
             if (startsWith(layerName, "BLOCKS"))
                 continue; // Skip
 
@@ -598,14 +591,26 @@ void DxfReader::applyProperties(const PropertyGroup* group)
 {
     auto ptr = dynamic_cast<const Properties*>(group);
     if (ptr) {
-        m_params.scaling = ptr->scaling;
         m_params.importAnnotations = ptr->importAnnotations;
         m_params.groupLayers = ptr->groupLayers;
         m_params.fontNameForTextObjects = ptr->fontNameForTextObjects.valueName();
     }
 }
 
-bool DxfReader::Internal::read(const FilePath& filepath, TaskProgress* progress)
+DxfReader::ReaderImpl::ReaderImpl()
+{
+    this->setGetLinePostCallback([=](size_t getLineSize) {
+        ++m_lineCounter;
+        m_fileReadSize += getLineSize;
+        if (m_progress)
+            m_progress->setValue(MathUtils::toPercent(m_fileReadSize, 0, m_fileSize));
+    });
+    this->setReportErrorCallback([=](std::string_view msg) {
+        m_messenger->emitError(msg);
+    });
+}
+
+bool DxfReader::ReaderImpl::read(const FilePath& filepath, TaskProgress* progress)
 {
     std::ifstream fstr(filepath);
     if (!fstr.is_open())
@@ -613,20 +618,12 @@ bool DxfReader::Internal::read(const FilePath& filepath, TaskProgress* progress)
 
     m_fileSize = filepathFileSize(filepath);
     m_progress = progress;
-    CDxfRead::read(fstr);
+    this->parse(fstr);
+    this->setSourceEncoding(this->codePage());
     return !this->failed();
 }
 
-void DxfReader::Internal::getLine()
-{
-    CDxfRead::getLine();
-    ++m_lineCounter;
-    m_fileReadSize += this->gcount();
-    if (m_progress)
-        m_progress->setValue(MathUtils::toPercent(m_fileReadSize, 0, m_fileSize));
-}
-
-bool DxfReader::Internal::setSourceEncoding(const std::string& codepage)
+bool DxfReader::ReaderImpl::setSourceEncoding(std::string_view codepage)
 {
     std::optional<Resource_FormatType> encoding;
 
@@ -680,13 +677,13 @@ bool DxfReader::Internal::setSourceEncoding(const std::string& codepage)
     }
     else {
         m_srcEncoding = Resource_ANSI;
-        m_messenger->emitWarning("Codepage " + codepage + " not supported");
+        m_messenger->emitWarning("Codepage " + std::string{codepage} + " not supported");
     }
 
     return true;
 }
 
-std::string DxfReader::Internal::toUtf8(const std::string& strSource)
+std::string DxfReader::ReaderImpl::toUtf8(const std::string& strSource) const
 {
     if (m_srcEncoding == Resource_ANSI) // Resource_ANSI is a pass-through(OpenCascade)
         return strSource;
@@ -703,7 +700,7 @@ std::string DxfReader::Internal::toUtf8(const std::string& strSource)
 #endif
 }
 
-TopoDS_Shape DxfReader::Internal::createBlockShape(const Dxf_BLOCK& block)
+TopoDS_Shape DxfReader::ReaderImpl::createBlockShape(const Dxf_BLOCK& block)
 {
     static const OccBlock defaultOccBlock{ BlockState::Unvisited, TopoDS_Shape{} };
     auto [it, inserted] = m_mapOccBlock.try_emplace(block.name, defaultOccBlock);
@@ -728,7 +725,7 @@ TopoDS_Shape DxfReader::Internal::createBlockShape(const Dxf_BLOCK& block)
     return blockShape;
 }
 
-TopoDS_Shape DxfReader::Internal::createEntityShape(const Dxf_EntityVariant& entityVar)
+TopoDS_Shape DxfReader::ReaderImpl::createEntityShape(const Dxf_EntityVariant& entityVar)
 {
     const TopoDS_Shape entityShape = std::visit(Cpp::Overloaded{
         [](std::monostate) { return TopoDS_Shape{}; },
@@ -749,7 +746,7 @@ TopoDS_Shape DxfReader::Internal::createEntityShape(const Dxf_EntityVariant& ent
     return entityShape;
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_3DFACE& face)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_3DFACE& face)
 {
     try {
         return makeFace(face);
@@ -760,7 +757,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_3DFACE& face)
     }
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_ARC& arc)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_ARC& arc)
 {
     if (arc.radius <= Precision::Confusion()) {
         m_messenger->emitError("ARC radius is null or degenerated");
@@ -785,7 +782,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_ARC& arc)
     return makeExtrusionShape(BRepBuilderAPI_MakeEdge(circ, p1, p2), arc.thickness, pl.frame.w);
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_CIRCLE& circle)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_CIRCLE& circle)
 {
     if (circle.radius <= Precision::Confusion()) {
         m_messenger->emitError("CIRCLE radius is null or quasi null");
@@ -797,7 +794,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_CIRCLE& circle)
     return makeExtrusionShape(BRepBuilderAPI_MakeEdge(circ), circle.thickness, pl.frame.w);
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_ELLIPSE& ellipse)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_ELLIPSE& ellipse)
 {
     if (ellipse.ratioMinorMajorAxis <= Precision::Confusion()) {
         m_messenger->emitError("ELLIPSE ratio is null or quasi null");
@@ -839,7 +836,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_ELLIPSE& ellipse)
     return makeExtrusionShape(BRepBuilderAPI_MakeEdge(elips), ellipse.thickness, pl.frame.w);
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_INSERT& insert)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_INSERT& insert)
 {
     if (!insert.isVisible)
         return {};
@@ -928,7 +925,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_INSERT& insert)
     return result;
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_LINE& line)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_LINE& line)
 {
     const Frame frame = makeOcsFrame(toOccDir(line.extrusionDirection));
     const gp_Pnt p1 = ocsPointToWcs(line.startPoint, frame);
@@ -939,7 +936,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_LINE& line)
     return makeExtrusionShape(BRepBuilderAPI_MakeEdge(p1, p2), line.thickness, frame.w);
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_LWPOLYLINE& polyline)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_LWPOLYLINE& polyline)
 {
     // Create OCC curve corresponding to arc via bulge
     auto makeArcFromBulge = [](
@@ -1026,14 +1023,148 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_LWPOLYLINE& polyline)
     return makeExtrusionShape(wireBuilder.Wire(), polyline.thickness, pl.frame.w);
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_MTEXT& mtext)
+static std::string dxfMTextGetPlainText(DxfStringRef text)
+{
+    std::string out;
+    out.reserve(text.size());
+
+    const size_t n = text.size();
+    size_t i = 0;
+    int braceDepth = 0;
+
+    auto isMTextCmd = [](char c) {
+        return c=='f' || c=='F' || c=='C' || c=='c'
+               || c=='H' || c=='W' || c=='A' || c=='T'
+               || c=='Q' || c=='S';
+    };
+
+    auto advanceUntilSemiColon = [&]{
+        while (i < n && text[i] != ';')
+            ++i;
+    };
+    auto advanceIfSemiColon = [&]{
+        if (i < n && text[i] == ';')
+            ++i;
+    };
+
+    while (i < n) {
+        const unsigned char c = text[i];
+
+        // ------------------------------------------------------------
+        // Handle blocks { ... }(with nesting)
+        // ------------------------------------------------------------
+        if (c == '{') {
+            ++braceDepth;
+            ++i;
+            continue;
+        }
+
+        if (c == '}' && braceDepth > 0) {
+            --braceDepth;
+            ++i;
+            continue;
+        }
+
+        if (braceDepth > 0) {
+            if (c == '\\') {
+                if (i + 1 < n) {
+                    const char code = text[i+1];
+                    // \P → newline
+                    if (code == 'P') {
+                        out.push_back('\n');
+                        i += 2;
+                        continue;
+                    }
+
+                    // \X...; (formatting)
+                    if (isMTextCmd(code)) {
+                        i += 2;
+                        advanceUntilSemiColon();
+                        advanceIfSemiColon();
+                        continue;
+                    }
+
+                    // Unknown sequence
+                    i += 2;
+                    continue;
+                }
+
+                ++i;
+                continue;
+            }
+
+            out.push_back(c);
+            ++i;
+            continue;
+        }
+
+        // ------------------------------------------------------------
+        // Outside { }
+        // ------------------------------------------------------------
+
+        // Inline-codes \X...
+        if (c == '\\' && i+1 < n) {
+            const char code = text[i+1];
+            if (code == 'P') {
+                out.push_back('\n');
+                i += 2;
+                continue;
+            }
+
+            if (isMTextCmd(code)) {
+                i += 2;
+                advanceUntilSemiColon();
+                advanceIfSemiColon();
+                continue;
+            }
+
+            i += 2;
+            continue;
+        }
+
+        // caret-codes
+        if (c == '^' && i+1 < n) {
+            const char x = text[i+1];
+            if (x == 'I')
+                out.push_back('\t');
+            else if (x == 'J')
+                out.push_back('\n');
+
+            // ^M ignoré
+            i += 2;
+            continue;
+        }
+
+        // Sequences %%c/d/p
+        if (c == '%' && i+1<n && text[i+1]=='%' && i+2<n) {
+            const char x = text[i+2];
+            if (x=='c'||x=='C')
+                out += u8"Ø";
+            else if (x=='d' || x=='D')
+                out += u8"°";
+            else if (x=='p' || x=='P')
+                out += u8"±";
+
+            i += 3;
+            continue;
+        }
+
+        // Normal text
+        out.push_back(c);
+        ++i;
+    }
+
+    return out;
+}
+
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_MTEXT& mtext)
 {
     if (!m_params.importAnnotations)
         return {};
 
     const gp_Pnt pt = toOccPnt(mtext.insertionPoint);
     const std::string& fontName = m_params.fontNameForTextObjects;
-    const double fontHeight = 1.4 * mtext.height * m_params.scaling;
+    const double fontHeight = 1.4 * mtext.height;
     Font_BRepFont brepFont;
     if (!brepFont.Init(fontName.c_str(), Font_FA_Regular, fontHeight)) {
         m_messenger->emitWarning(fmt::format("Font_BRepFont is null for '{}'", fontName));
@@ -1069,7 +1200,8 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_MTEXT& mtext)
         xAxisDir = gp::DX().Transformed(trsf);
     }
 
-    const auto occTextStr = string_conv<NCollection_String>(mtext.str);
+    const std::string mTextStr_u8 = this->toUtf8(dxfMTextGetPlainText(mtext.str));
+    const auto occTextStr = string_conv<NCollection_String>(mTextStr_u8);
     const gp_Dir extDir = toOccDir(mtext.extrusionDirection);
     const gp_Ax3 locText(pt, extDir, xAxisDir);
     Font_BRepTextBuilder brepTextBuilder;
@@ -1090,7 +1222,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_MTEXT& mtext)
 #endif
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_POINT& point)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_POINT& point)
 {
     TopoDS_Shape shape = BRepUtils::makeEmptyCompound();
 
@@ -1222,7 +1354,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_POINT& point)
     return shape;
 }
 
-TopoDS_Shape DxfReader::Internal::createShapePolygonMesh3d(const Dxf_POLYLINE& polyline)
+TopoDS_Shape DxfReader::ReaderImpl::createShapePolygonMesh3d(const Dxf_POLYLINE& polyline)
 {
     const auto& vertices = polyline.vertices;
     // MxN regular mesh
@@ -1308,7 +1440,7 @@ TopoDS_Shape DxfReader::Internal::createShapePolygonMesh3d(const Dxf_POLYLINE& p
     return BRepUtils::makeFace(new Poly_Triangulation(nodes, triangles));
 }
 
-TopoDS_Shape DxfReader::Internal::createShapePolyfaceMesh(const Dxf_POLYLINE& polyline)
+TopoDS_Shape DxfReader::ReaderImpl::createShapePolyfaceMesh(const Dxf_POLYLINE& polyline)
 {
     const auto& vertices = polyline.vertices;
     const int meshVertexCount = polyline.polygonMeshMVertexCount;
@@ -1337,7 +1469,7 @@ TopoDS_Shape DxfReader::Internal::createShapePolyfaceMesh(const Dxf_POLYLINE& po
     return BRepUtils::makeFace(new Poly_Triangulation(nodes, triangles));
 }
 
-TopoDS_Shape DxfReader::Internal::createShapePolyline3d(const Dxf_POLYLINE& polyline)
+TopoDS_Shape DxfReader::ReaderImpl::createShapePolyline3d(const Dxf_POLYLINE& polyline)
 {
     const auto& vertices = polyline.vertices;
     const bool isPolylineClosed = (polyline.flags & Dxf_POLYLINE::Flag::Closed) != 0;
@@ -1353,7 +1485,7 @@ TopoDS_Shape DxfReader::Internal::createShapePolyline3d(const Dxf_POLYLINE& poly
     return BRepUtils::makeEdge(polygonBuilder.get());
 }
 
-TopoDS_Shape DxfReader::Internal::createShapePolyline2d(const Dxf_POLYLINE& polyline)
+TopoDS_Shape DxfReader::ReaderImpl::createShapePolyline2d(const Dxf_POLYLINE& polyline)
 {
     // TODO Handle Dxf_POLYLINE::Vertex::bulge
     const auto& vertices = polyline.vertices;
@@ -1373,7 +1505,7 @@ TopoDS_Shape DxfReader::Internal::createShapePolyline2d(const Dxf_POLYLINE& poly
     return makeExtrusionShape(shape, polyline.thickness, extrusionDir);
 }
 
-TopoDS_Shape DxfReader::Internal::createShapeCurveFit(const Dxf_POLYLINE& polyline)
+TopoDS_Shape DxfReader::ReaderImpl::createShapeCurveFit(const Dxf_POLYLINE& polyline)
 {
     const auto& vertices = polyline.vertices;
     const bool isPolylineClosed = polyline.flags & Dxf_POLYLINE::Flag::Closed;
@@ -1417,7 +1549,7 @@ TopoDS_Shape DxfReader::Internal::createShapeCurveFit(const Dxf_POLYLINE& polyli
     return makeExtrusionShape(edge, polyline.thickness, extrusionDir);
 }
 
-TopoDS_Shape DxfReader::Internal::createShapeSplineFit(const Dxf_POLYLINE& polyline)
+TopoDS_Shape DxfReader::ReaderImpl::createShapeSplineFit(const Dxf_POLYLINE& polyline)
 {
     const bool isPolylineClosed = polyline.flags & Dxf_POLYLINE::Flag::Closed;
     const gp_Dir extrusionDir = toOccDir(polyline.extrusionDirection);
@@ -1458,7 +1590,7 @@ TopoDS_Shape DxfReader::Internal::createShapeSplineFit(const Dxf_POLYLINE& polyl
     return makeExtrusionShape(edge, polyline.thickness, extrusionDir);
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_POLYLINE& polyline)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_POLYLINE& polyline)
 {
     if (polyline.flags & Dxf_POLYLINE::Flag::PolyfaceMesh) {
         return this->createShapePolyfaceMesh(polyline);
@@ -1480,7 +1612,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_POLYLINE& polyline)
     }
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_SOLID& solid)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_SOLID& solid)
 {
     Dxf_QuadBase quad = solid;
     if (solid.hasCorner4) {
@@ -1497,7 +1629,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_SOLID& solid)
     }
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_SPLINE& spline)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_SPLINE& spline)
 {
     // https://documentation.help/AutoCAD-DXF/WS1a9193826455f5ff18cb41610ec0a2e719-79e1.htm
     try {
@@ -1535,7 +1667,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_SPLINE& spline)
     return {};
 }
 
-TopoDS_Shape DxfReader::Internal::createShape(const Dxf_TEXT& text)
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_TEXT& text)
 {
     if (!m_params.importAnnotations)
         return {};
@@ -1546,7 +1678,7 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_TEXT& text)
     if (toLowerCase_C(fontName) == "arial_narrow")
         fontName.replace(5, 1, " ");
 
-    const double fontHeight = 1.4 * text.height * m_params.scaling;
+    const double fontHeight = 1.4 * text.height;
     Font_BRepFont brepFont;
     brepFont.SetWidthScaling(static_cast<float>(text.relativeXScaleFactorWidth));
     if (!brepFont.Init(fontName.c_str(), Font_FA_Regular, fontHeight/*, Font_StrictLevel_Aliases*/)) {
@@ -1581,12 +1713,12 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_TEXT& text)
     ;
 
     const DxfCoords& alignPnt = applyFirstAlignPnt ? text.firstAlignmentPoint : text.secondAlignmentPoint;
-    const gp_Pnt pt = this->toPnt(alignPnt);
+    const gp_Pnt pt = toOccPnt(alignPnt);
 
     gp_Vec xAxisDir = gp::DX();
     if (hjust == DxfHJustification::Aligned || hjust == DxfHJustification::Fit) {
-        const gp_Pnt p1 = this->toPnt(text.firstAlignmentPoint);
-        const gp_Pnt p2 = this->toPnt(text.secondAlignmentPoint);
+        const gp_Pnt p1 = toOccPnt(text.firstAlignmentPoint);
+        const gp_Pnt p2 = toOccPnt(text.secondAlignmentPoint);
         xAxisDir = gp_Vec{p1, p2};
 
         // Ensure non-null x-axis direction
@@ -1608,33 +1740,14 @@ TopoDS_Shape DxfReader::Internal::createShape(const Dxf_TEXT& text)
     const gp_Dir extDir = toOccDir(text.extrusionDirection);
     const gp_Ax3 locText(pt, extDir, xAxisDir);
     Font_BRepTextBuilder brepTextBuilder;
-    const auto occTextStr = string_conv<NCollection_String>(text.str);
+    const auto occTextStr = string_conv<NCollection_String>(this->toUtf8(std::string{text.str}));
     return brepTextBuilder.Perform(brepFont, occTextStr, locText, hAlign, vAlign);
 }
 
-void DxfReader::Internal::ReportError(const std::string& msg)
-{
-    m_messenger->emitError(msg);
-}
-
-gp_Pnt DxfReader::Internal::toPnt(const DxfCoords& coords) const
-{
-    double sp1 = coords.x;
-    double sp2 = coords.y;
-    double sp3 = coords.z;
-    if (!MathUtils::fuzzyEqual(m_params.scaling, 1.)) {
-        sp1 = sp1 * m_params.scaling;
-        sp2 = sp2 * m_params.scaling;
-        sp3 = sp3 * m_params.scaling;
-    }
-
-    return gp_Pnt{sp1, sp2, sp3};
-}
-
-void DxfReader::Internal::addShape(const TopoDS_Shape& shape, const Dxf_BaseEntity& srcEntity)
+void DxfReader::ReaderImpl::addShape(const TopoDS_Shape& shape, const Dxf_BaseEntity& srcEntity)
 {
 #if 0
-    const Dxf_LAYER* layer = m_internal->findLayer(srcEntity.layerName);
+    const Dxf_LAYER* layer = m_impl->findLayer(srcEntity.layerName);
     DxfColorIndex colorId = srcEntity.colorId;
     if (colorId == dxfColorByLayer && layer)
         colorId = layer->colorId;
@@ -1676,7 +1789,7 @@ void DxfReader::Internal::addShape(const TopoDS_Shape& shape, const Dxf_BaseEnti
 #endif
 }
 
-TopoDS_Face DxfReader::Internal::makeFace(const Dxf_QuadBase& quad)
+TopoDS_Face DxfReader::ReaderImpl::makeFace(const Dxf_QuadBase& quad)
 {
     const gp_Pnt p1 = toOccPnt(quad.corner1);
     const gp_Pnt p2 = toOccPnt(quad.corner2);
@@ -1706,7 +1819,7 @@ TopoDS_Face DxfReader::Internal::makeFace(const Dxf_QuadBase& quad)
 }
 
 // Excerpted from FreeCad/src/Mod/Import/App/ImpExpDxf
-TopoDS_Shape DxfReader::Internal::createSplineFromPolesAndKnots(const Dxf_SPLINE& spline)
+TopoDS_Shape DxfReader::ReaderImpl::createSplineFromPolesAndKnots(const Dxf_SPLINE& spline)
 {
     if (spline.weights.size() > spline.controlPoints.size())
         return {};
@@ -1805,7 +1918,7 @@ TopoDS_Shape DxfReader::Internal::createSplineFromPolesAndKnots(const Dxf_SPLINE
 }
 
 // Excerpted from FreeCad/src/Mod/Import/App/ImpExpDxf
-TopoDS_Shape DxfReader::Internal::createInterpolationSpline(const Dxf_SPLINE& spline)
+TopoDS_Shape DxfReader::ReaderImpl::createInterpolationSpline(const Dxf_SPLINE& spline)
 {
     const auto fitPointCount = CppUtils::safeStaticCast<int>(spline.fitPoints.size());
 
