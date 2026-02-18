@@ -39,8 +39,8 @@ namespace {
 
 bool compareCircle(const gp_Circ& lhs, const gp_Circ& rhs, double tolerance = Precision::Confusion())
 {
-    return lhs.Location().IsEqual(rhs.Location(), tolerance)
-            && lhs.Axis().Direction().IsEqual(rhs.Axis().Direction(), tolerance)
+    return GeomUtils::equal(lhs.Location(), rhs.Location(), tolerance)
+            && GeomUtils::equal(lhs.Axis().Direction(), rhs.Axis().Direction(), tolerance)
             && std::abs(lhs.Radius() - rhs.Radius()) < tolerance;
 }
 
@@ -59,7 +59,7 @@ void TestMeasure::BRepVertexPosition_test()
     const gp_Pnt pnt(154.5, 0.87, -487.64);
     const TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(pnt);
     const gp_Pnt pntRes = MeasureToolBRep::brepVertexPosition(vertex);
-    QVERIFY(pntRes.IsEqual(pnt, Precision::Confusion()));
+    QVERIFY(GeomUtils::equal(pntRes, pnt));
 }
 
 void TestMeasure::BRepCircle_Regular_test()
@@ -70,7 +70,7 @@ void TestMeasure::BRepCircle_Regular_test()
     const GC_MakeCircle makeCircle(gp_Ax2(pntCenter, dirNormal), radius);
     const TopoDS_Edge edge = BRepBuilderAPI_MakeEdge(makeCircle.Value(), 0, 1.57);
     const MeasureCircle circleRes = MeasureToolBRep::brepCircle(edge);
-    QVERIFY(circleRes.pntAnchor.IsEqual(GeomUtils::d0(BRepAdaptor_Curve(edge), 0), Precision::Confusion()));
+    QVERIFY(GeomUtils::equal(circleRes.pntAnchor, GeomUtils::d0(BRepAdaptor_Curve(edge), 0)));
     QVERIFY(circleRes.isArc);
     QVERIFY(compareCircle(circleRes.value, makeCircle.Value()->Circ()));
 }
@@ -83,7 +83,7 @@ void TestMeasure::BRepCircle_Ellipse_test()
     const GC_MakeEllipse makeEllipse(gp_Ax2(pntCenter, dirNormal), radius, radius);
     const TopoDS_Edge edge = BRepBuilderAPI_MakeEdge(makeEllipse.Value(), 0, 2.27);
     const MeasureCircle circleRes = MeasureToolBRep::brepCircle(edge);
-    QVERIFY(circleRes.pntAnchor.IsEqual(GeomUtils::d0(BRepAdaptor_Curve(edge), 0), Precision::Confusion()));
+    QVERIFY(GeomUtils::equal(circleRes.pntAnchor, GeomUtils::d0(BRepAdaptor_Curve(edge), 0)));
     QVERIFY(circleRes.isArc);
     QVERIFY(compareCircle(circleRes.value, gp_Circ(gp_Ax2(pntCenter, dirNormal), radius)));
 }
@@ -99,7 +99,7 @@ void TestMeasure::BRepCircle_PseudoCircle_test()
     QVERIFY(approxCircle.HasResult());
     const TopoDS_Edge edge = BRepBuilderAPI_MakeEdge(approxCircle.Curve(), 0, 2.98);
     const MeasureCircle circleRes = MeasureToolBRep::brepCircle(edge);
-    QVERIFY(circleRes.pntAnchor.IsEqual(GeomUtils::d0(BRepAdaptor_Curve(edge), 0), Precision::Confusion()));
+    QVERIFY(GeomUtils::equal(circleRes.pntAnchor, GeomUtils::d0(BRepAdaptor_Curve(edge), 0)));
     QVERIFY(circleRes.isArc);
     QVERIFY(compareCircle(circleRes.value, makeCircle.Value()->Circ(), Precision::Approximation()));
 }
@@ -131,8 +131,8 @@ void TestMeasure::BRepMinDistance_TwoPoints_test()
     const TopoDS_Shape shape1 = BRepBuilderAPI_MakeVertex(pnt1);
     const TopoDS_Shape shape2 = BRepBuilderAPI_MakeVertex(pnt2);
     const MeasureDistance minDist = MeasureToolBRep::brepMinDistance(shape1, shape2);
-    QVERIFY(minDist.pnt1.IsEqual(pnt1, Precision::Confusion()));
-    QVERIFY(minDist.pnt2.IsEqual(pnt2, Precision::Confusion()));
+    QVERIFY(GeomUtils::equal(minDist.pnt1, pnt1));
+    QVERIFY(GeomUtils::equal(minDist.pnt2, pnt2));
     QCOMPARE(UnitSystem::millimeters(minDist.value).value, pnt1.Distance(pnt2));
 }
 
@@ -166,7 +166,7 @@ void TestMeasure::BRepAngle_TwoLinesIntersect_test()
     const TopoDS_Shape shape1 = BRepBuilderAPI_MakeEdge(gp_Lin(gp::Origin(), gp::DX()));
     const TopoDS_Shape shape2 = BRepBuilderAPI_MakeEdge(gp_Lin(gp::Origin(), gp::DY()));
     const MeasureAngle angle = MeasureToolBRep::brepAngle(shape1, shape2);
-    QVERIFY(angle.pntCenter.IsEqual(gp::Origin(), Precision::Confusion()));
+    QVERIFY(GeomUtils::equal(angle.pntCenter, gp::Origin()));
     QCOMPARE(angle.value, 90. * Quantity_Degree);
 }
 
@@ -211,8 +211,8 @@ void TestMeasure::BRepBoundingBox_Sphere_test()
     const double sphereRadius = 50.;
     const TopoDS_Shape sphereShape = BRepPrimAPI_MakeSphere(sphereRadius);
     const MeasureBoundingBox bndBox = MeasureToolBRep::brepBoundingBox(sphereShape);
-    QVERIFY(bndBox.cornerMin.IsEqual(gp_Pnt{-sphereRadius, -sphereRadius, -sphereRadius}, Precision::Confusion()));
-    QVERIFY(bndBox.cornerMax.IsEqual(gp_Pnt{sphereRadius, sphereRadius, sphereRadius}, Precision::Confusion()));
+    QVERIFY(GeomUtils::equal(bndBox.cornerMin, gp_Pnt{-sphereRadius, -sphereRadius, -sphereRadius}));
+    QVERIFY(GeomUtils::equal(bndBox.cornerMax, gp_Pnt{sphereRadius, sphereRadius, sphereRadius}));
     QCOMPARE(double(UnitSystem::millimeters(bndBox.xLength)), 2 * sphereRadius);
     QCOMPARE(double(UnitSystem::millimeters(bndBox.yLength)), 2 * sphereRadius);
     QCOMPARE(double(UnitSystem::millimeters(bndBox.zLength)), 2 * sphereRadius);

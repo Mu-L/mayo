@@ -11,6 +11,7 @@
 #include "../base/cpp_utils.h"
 #include "../base/document.h"
 #include "../base/filepath_conv.h"
+#include "../base/geom_utils.h"
 #include "../base/io_system.h"
 #include "../base/math_utils.h"
 #include "../base/messenger.h"
@@ -140,11 +141,6 @@ private:
 
 namespace {
 
-bool isVectorNull(const gp_Vec& vec)
-{
-    return vec.IsEqual({}, Precision::Confusion(), Precision::Angular());
-}
-
 Aspect_GradientFillMethod toOccGradientFill(ImageWriter::GradientFill fill)
 {
     switch (fill) {
@@ -192,7 +188,7 @@ bool ImageWriter::transfer(Span<const ApplicationItem> appItems, TaskProgress* /
 
 bool ImageWriter::writeFile(const FilePath& filepath, TaskProgress* progress)
 {
-    if (isVectorNull(m_params.cameraOrientation))
+    if (GeomUtils::isNull(m_params.cameraOrientation))
         this->messenger()->emitError(ImageWriterI18N::textIdTr("Camera orientation vector must not be null"));
 
 #if OCC_VERSION_HEX < OCC_VERSION_CHECK(7, 6, 0)
@@ -340,7 +336,7 @@ OccHandle<V3d_View> ImageWriter::createV3dView(GraphicsScene* gfxScene, const Pa
     }
 
     view->Camera()->SetProjectionType(fnToGfxCamProjection(params.cameraProjection));
-    if (!isVectorNull(params.cameraOrientation))
+    if (!GeomUtils::isNull(params.cameraOrientation))
         view->SetProj(params.cameraOrientation.X(), params.cameraOrientation.Y(), params.cameraOrientation.Z());
     else
         view->SetProj(1, -1, 1);
