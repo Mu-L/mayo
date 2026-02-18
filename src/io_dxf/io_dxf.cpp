@@ -118,7 +118,7 @@ gp_Dir toOccDir(const DxfCoords& coords, const gp_Dir& defaultDir = gp::DZ())
         return defaultDir;
 
     const gp_Vec v = toOccVec(coords);
-    if (v.SquareMagnitude() <= Precision::SquareConfusion())
+    if (GeomUtils::isNull(v))
         return defaultDir;
 
     return v;
@@ -142,7 +142,7 @@ Frame makeOcsFrame(const gp_Dir& w)
 
     // Project 'a' in the perpendicular plane to 'w' : uvec = a - (a·w) w
     gp_Vec uvec = gp_Vec(a) - gp_Vec(w) * (a.Dot(w));
-    if (uvec.SquareMagnitude() <= Precision::SquareConfusion()) {
+    if (GeomUtils::isNull(uvec)) {
         // a ≈ colinear to w → try with another 'a'
         a = gp::DY();
         uvec = gp_Vec(a) - gp_Vec(w) * (a.Dot(w));
@@ -168,16 +168,6 @@ Placement makePlacementFromOcs(
     // Z=w, X=u → déterministic orientation
     pl.ax2 = gp_Ax2{cw, pl.frame.w, pl.frame.u};
     return pl;
-}
-
-// Normalize angle `a` in degrees within [0,360)
-double normalizeAngleDeg(double a)
-{
-    double r = std::fmod(a, 360.);
-    if (r < 0.0)
-        r += 360.0;
-
-    return r;
 }
 
 // Point on circle from OCS angle(radians)
@@ -770,6 +760,14 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_ARC& arc)
 
     const gp_Circ circ{pl.ax2, arc.radius};
 
+    // Normalize angle `a` in degrees within [0,360)
+    auto normalizeAngleDeg = [](double a) -> double {
+        double r = std::fmod(a, 360.);
+        if (r < 0.0)
+            r += 360.0;
+        return r;
+    };
+
     const double a1d = normalizeAngleDeg(arc.startAngle);
     const double a2d = normalizeAngleDeg(arc.endAngle);
     if (std::abs(a1d - a2d) <= Precision::Angular())
@@ -826,16 +824,27 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_ELLIPSE& ellipse)
 
     const gp_Elips elips(pl.ax2, rmajor, rminor);
 
+    constexpr double pi2 = 2 * 3.14159265358979323846;
+    auto normalizeAngleRad = [=](double a) {
+        double r = std::fmod(a, pi2); // Force in  [0, 2π)
+        if (r < 0.)
+            r += pi2;
+        return r;
+    };
+
     // Build edge, complete or partial
     TopoDS_Edge edge;
-    const double u1 = ellipse.startParam;
-    const double u2 = ellipse.endParam;
-    if (std::abs(u1 - u2) <= Precision::Angular())
+    const double u1 = normalizeAngleRad(ellipse.startParam);
+    const double u2 = normalizeAngleRad(ellipse.endParam);
+    const double uDiff = u2 - u1;
+    const double uDiffMod = uDiff > 0. ? uDiff : (uDiff + pi2);
+    // Full ellipse if uDiffMod~0 or uDiffMod~2π
+    if (MathUtils::fuzzyIsNull(uDiffMod) || MathUtils::fuzzyIsNull(uDiffMod - pi2))
         edge = BRepBuilderAPI_MakeEdge(elips);
     else
-        edge = BRepBuilderAPI_MakeEdge(elips, u1, u2);
+        edge = BRepBuilderAPI_MakeEdge(elips, u1, u1 + uDiffMod);
 
-    return makeExtrusionShape(BRepBuilderAPI_MakeEdge(elips), ellipse.thickness, pl.frame.w);
+    return makeExtrusionShape(edge, ellipse.thickness, pl.frame.w);
 }
 
 TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_INSERT& insert)
@@ -932,7 +941,7 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_LINE& line)
     const Frame frame = makeOcsFrame(toOccDir(line.extrusionDirection));
     const gp_Pnt p1 = ocsPointToWcs(line.startPoint, frame);
     const gp_Pnt p2 = ocsPointToWcs(line.endPoint, frame);
-    if (p1.SquareDistance(p2) <= Precision::SquareConfusion())
+    if (GeomUtils::equal(p1, p2))
         return {};
 
     return makeExtrusionShape(BRepBuilderAPI_MakeEdge(p1, p2), line.thickness, frame.w);
@@ -954,7 +963,7 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_LWPOLYLINE& polyline)
         // Chord direction and perpendicular vec in the plane
         const gp_Vec d = chord / c;
         gp_Vec perp = gp_Vec{planeNormal} ^ d; // n × chordDir
-        if (perp.SquareMagnitude() <= Precision::SquareConfusion())
+        if (GeomUtils::isNull(perp))
             return {};
 
         perp.Normalize();
@@ -1012,7 +1021,7 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_LWPOLYLINE& polyline)
             OccHandle<Geom_TrimmedCurve> arc = makeArcFromBulge(p0, p1, v0.bulge, normal);
             if (!arc.IsNull())
                 wireBuilder.Add(BRepBuilderAPI_MakeEdge(arc));
-            else if (gp_Vec{p0, p1}.SquareMagnitude() > Precision::SquareConfusion())
+            else if (!GeomUtils::equal(p0, p1))
                 wireBuilder.Add(BRepBuilderAPI_MakeEdge(p0, p1));
         }
     }
@@ -1212,15 +1221,13 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_MTEXT& mtext)
 
     // Ensure non-null x-axis direction
     gp_Vec xAxisDir = toOccVec(mtext.xAxisDirection);
-    if (xAxisDir.Magnitude() < gp::Resolution())
+    if (GeomUtils::isNull(xAxisDir))
         xAxisDir = gp::DX();
 
     // If rotation angle is non-null and x-axis direction defaults to standard Ox then set x-axis
     // so it matches rotation angle
     xAxisDir.Normalize();
-    if (!MathUtils::fuzzyIsNull(mtext.rotationAngle)
-        && xAxisDir.IsEqual(gp::DX(), Precision::Confusion(), Precision::Angular()))
-    {
+    if (!MathUtils::fuzzyIsNull(mtext.rotationAngle) && GeomUtils::equal(xAxisDir, gp::DX())) {
         const double angle = MathUtils::degreeToRadian(mtext.rotationAngle);
         const gp_Trsf trsf = GeomUtils::makeRotation(gp_Ax1(pt, gp::DZ()), angle);
         xAxisDir = gp::DX().Transformed(trsf);
@@ -1258,7 +1265,7 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_POINT& point)
     if (!MathUtils::fuzzyIsNull(point.thickness)) {
         const gp_Vec step(n.XYZ() * point.thickness);
         const gp_Pnt dst(pnt.X() + step.X(), pnt.Y() + step.Y(), pnt.Z() + step.Z());
-        if (pnt.Distance(dst) > Precision::Confusion())
+        if (!GeomUtils::equal(pnt, dst))
             BRepUtils::addShape(&shape, BRepBuilderAPI_MakeEdge(pnt, dst));
     }
 
@@ -1557,7 +1564,7 @@ TopoDS_Shape DxfReader::ReaderImpl::createShapeCurveFit(const Dxf_POLYLINE& poly
         auto dirFromAngle = [](double angle_deg, const Frame& frame) -> gp_Vec {
             const double a = MathUtils::degreeToRadian(angle_deg);
             const gp_Vec dir = std::cos(a)*gp_Vec(frame.u) + std::sin(a)*gp_Vec(frame.v);
-            if (dir.SquareMagnitude() > Precision::SquareConfusion())
+            if (!GeomUtils::isNull(dir))
                 return dir;
             else
                 return frame.u;
@@ -1748,15 +1755,14 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_TEXT& text)
         xAxisDir = gp_Vec{p1, p2};
 
         // Ensure non-null x-axis direction
-        if (xAxisDir.Magnitude() < gp::Resolution())
+        if (GeomUtils::isNull(xAxisDir))
             xAxisDir = gp::DX();
     }
 
     // If rotation angle is non-null and x-axis direction defaults to standard Ox then set x-axis
     // so it matches rotation angle
     xAxisDir.Normalize();
-    if (!MathUtils::fuzzyIsNull(text.rotationAngle)
-        && xAxisDir.IsEqual(gp::DX(), Precision::Confusion(), Precision::Angular()))
+    if (!MathUtils::fuzzyIsNull(text.rotationAngle) && GeomUtils::equal(xAxisDir, gp::DX()))
     {
         const double angle = MathUtils::degreeToRadian(text.rotationAngle);
         const gp_Trsf trsf = GeomUtils::makeRotation(gp_Ax1(pt, gp::DZ()), angle);
@@ -1822,15 +1828,13 @@ TopoDS_Face DxfReader::ReaderImpl::makeFace(const Dxf_QuadBase& quad)
     const gp_Pnt p3 = toOccPnt(quad.corner3);
     const gp_Pnt p4 = toOccPnt(quad.corner4);
 
-    const double pntTolerance = Precision::Confusion();
-    if (p1.IsEqual(p2, pntTolerance) || p1.IsEqual(p3, pntTolerance) || p2.IsEqual(p3, pntTolerance))
+    if (GeomUtils::equal(p1, p2) || GeomUtils::equal(p1, p3) || GeomUtils::equal(p2, p3))
         return {};
 
-    TopoDS_Face face;
     BRepBuilderAPI_MakeWire makeWire;
     makeWire.Add(BRepBuilderAPI_MakeEdge(p1, p2));
     makeWire.Add(BRepBuilderAPI_MakeEdge(p2, p3));
-    if (quad.hasCorner4 && !p3.IsEqual(p4, pntTolerance) && !p1.IsEqual(p4, pntTolerance)) {
+    if (quad.hasCorner4 && !GeomUtils::equal(p3, p4) && !GeomUtils::equal(p1, p4)) {
         makeWire.Add(BRepBuilderAPI_MakeEdge(p3, p4));
         makeWire.Add(BRepBuilderAPI_MakeEdge(p4, p1));
     }
@@ -1839,9 +1843,9 @@ TopoDS_Face DxfReader::ReaderImpl::makeFace(const Dxf_QuadBase& quad)
     }
 
     if (makeWire.IsDone())
-        face = BRepBuilderAPI_MakeFace(makeWire.Wire(), true/*onlyPlane*/);
+        return BRepBuilderAPI_MakeFace(makeWire.Wire(), true/*onlyPlane*/);
 
-    return face;
+    return {};
 }
 
 // Excerpted from FreeCad/src/Mod/Import/App/ImpExpDxf
@@ -1907,7 +1911,7 @@ TopoDS_Shape DxfReader::ReaderImpl::createSplineFromPolesAndKnots(const Dxf_SPLI
     // Check internal mutls(forbidden: mult == degree+1 inside)
     bool hasForbiddenInternal = false;
     for (int i = (occMults.Lower() + 1); i < occMults.Upper(); ++i) {
-        if (occMults[i] > spline.degree) { // required: <= degree
+        if (occMults.Value(i) > spline.degree) { // required: <= degree
             hasForbiddenInternal = true;
             break;
         }
@@ -1970,9 +1974,7 @@ TopoDS_Shape DxfReader::ReaderImpl::createInterpolationSpline(const Dxf_SPLINE& 
     GeomAPI_Interpolate interp(fitpoints, false/*isPeriodic*/, Precision::Confusion());
     const gp_Vec tanStart = toOccVec(spline.startTangent);
     const gp_Vec tanEnd = toOccVec(spline.endTangent);
-    const bool hasTanStart = tanStart.SquareMagnitude() > Precision::SquareConfusion();
-    const bool hasTanEnd = tanEnd.SquareMagnitude() > Precision::SquareConfusion();
-    if (hasTanStart || hasTanEnd)
+    if (!GeomUtils::isNull(tanStart) || !GeomUtils::isNull(tanEnd))
         interp.Load(tanStart, tanEnd, true/*scale*/);
 
     interp.Perform();
