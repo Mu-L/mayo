@@ -880,56 +880,53 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_INSERT& insert)
     const gp_Pnt insertPnt_wcs = ocsPointToWcs(insert.insertPoint, frame);
     const gp_Vec blockPnt_wcs = ocsVecToWcs(block.basePoint, frame);
     const double theta = MathUtils::degreeToRadian(insert.rotationAngle);
-    const double rowSpacing = insert.rowSpacing;
-    const double colSpacing = insert.columnSpacing;
-    const gp_Vec uframe{frame.u};
-    const gp_Vec vframe{frame.v};
 
-    for (int j = 0; j < rows; ++j) {
-        for (int i = 0; i < cols; ++i) {
-            // Grid offset along frame u/v
-            const gp_Vec gridOffset = uframe * (rowSpacing * i) + vframe * (colSpacing * j);
-            const gp_Pnt Pij = insertPnt_wcs.Translated(gridOffset);
+    auto gridCellPoint = [&](int row, int col) -> gp_Pnt {
+        const gp_Vec offset =
+            gp_Vec{frame.u} * (insert.rowSpacing * row)
+            + gp_Vec{frame.v} * (insert.columnSpacing * col)
+        ;
+        return insertPnt_wcs.Translated(offset);
+    };
 
-            TopoDS_Shape instance;
-
-            if (unitScale) {
-                const gp_Trsf scaleTrsf = unitScaleTrsf(gp::Origin(), frame, insert.scaleFactor);
-                const gp_Trsf rotationTrsf = GeomUtils::makeRotation(gp_Ax1{gp::Origin(), frame.w}, theta);
-                const gp_Trsf t1Trsf = GeomUtils::makeTranslation(-blockPnt_wcs);
-                const gp_Trsf t2Trsf = GeomUtils::makeTranslation(Pij.XYZ());
+    if (unitScale) {
+        const gp_Trsf scaleTrsf = unitScaleTrsf(gp::Origin(), frame, insert.scaleFactor);
+        const gp_Trsf rotationTrsf = GeomUtils::makeRotation(gp_Ax1{gp::Origin(), frame.w}, theta);
+        const gp_Trsf t1Trsf = GeomUtils::makeTranslation(-blockPnt_wcs);
+        for (int j = 0; j < rows; ++j) {
+            for (int i = 0; i < cols; ++i) {
+                const gp_Trsf t2Trsf = GeomUtils::makeTranslation(gridCellPoint(i, j).XYZ());
                 const gp_Trsf trsf = t2Trsf * rotationTrsf * scaleTrsf * t1Trsf;
-                instance = content.Moved(trsf);
-            } else {
-                // Non-unit scale -> GTransform
+                BRepUtils::addShape(&result, content.Moved(trsf));
+            }
+        }
+    }
+    else {
+        // Non-unit scale -> GTransform
 
-                // U = [u v w]
-                const gp_Mat matFrame{
-                    frame.u.X(), frame.v.X(), frame.w.X(),
-                    frame.u.Y(), frame.v.Y(), frame.w.Y(),
-                    frame.u.Z(), frame.v.Z(), frame.w.Z()
-                };
-                const DxfScale& sf = insert.scaleFactor;
-                const gp_Mat matScale{
-                    sf.x, 0,    0,
-                    0,    sf.y, 0,
-                    0,    0,    sf.z
-                };
-                const gp_Mat Ms = matFrame * matScale * matFrame.Transposed();
-                const gp_Trsf R = GeomUtils::makeRotation(gp_Ax1{gp::Origin(), frame.w}, theta);
-                const gp_Mat L = R.VectorialPart() * Ms;
-
-                const gp_XYZ LB = L * blockPnt_wcs.XYZ();
-                const gp_XYZ tXYZ = Pij.XYZ() - LB;
-
+        // U = [u v w]
+        const gp_Mat matFrame{
+            frame.u.X(), frame.v.X(), frame.w.X(),
+            frame.u.Y(), frame.v.Y(), frame.w.Y(),
+            frame.u.Z(), frame.v.Z(), frame.w.Z()
+        };
+        const DxfScale& sf = insert.scaleFactor;
+        const gp_Mat matScale{
+            sf.x, 0,    0,
+            0,    sf.y, 0,
+            0,    0,    sf.z
+        };
+        const gp_Mat Ms = matFrame * matScale * matFrame.Transposed();
+        const gp_Trsf R = GeomUtils::makeRotation(gp_Ax1{gp::Origin(), frame.w}, theta);
+        const gp_Mat L = R.VectorialPart() * Ms;
+        const gp_XYZ LB = L * blockPnt_wcs.XYZ();
+        for (int j = 0; j < rows; ++j) {
+            for (int i = 0; i < cols; ++i) {
                 gp_GTrsf G;
                 G.SetVectorialPart(L);
-                G.SetTranslationPart(tXYZ);
-
-                instance = BRepBuilderAPI_GTransform(content, G, true/*copy*/).Shape();
+                G.SetTranslationPart(gridCellPoint(i, j).XYZ() - LB);
+                BRepUtils::addShape(&result, BRepBuilderAPI_GTransform(content, G, true/*copy*/).Shape());
             }
-
-            BRepUtils::addShape(&result, instance);
         }
     }
 
@@ -1197,7 +1194,9 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_MTEXT& mtext)
     if (!m_params.importAnnotations)
         return {};
 
-    const gp_Pnt pt = toOccPnt(mtext.insertionPoint);
+    const gp_Dir extrusionDir = toOccDir(mtext.extrusionDirection);
+    const Frame frame = makeOcsFrame(extrusionDir);
+    const gp_Pnt pt = ocsPointToWcs(mtext.insertionPoint, frame);
     const std::string& fontName = m_params.fontNameForTextObjects;
     const double fontHeight = 1.4 * mtext.height;
     Font_BRepFont brepFont;
