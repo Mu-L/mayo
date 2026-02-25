@@ -1198,9 +1198,9 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_MTEXT& mtext)
     const Frame frame = makeOcsFrame(extrusionDir);
     const gp_Pnt pt = ocsPointToWcs(mtext.insertionPoint, frame);
     const std::string& fontName = m_params.fontNameForTextObjects;
-    const double fontHeight = 1.4 * mtext.height;
+    const double lineHeight = 1.4 * mtext.height;
     Font_BRepFont brepFont;
-    if (!brepFont.Init(fontName.c_str(), Font_FA_Regular, fontHeight)) {
+    if (!brepFont.Init(fontName.c_str(), Font_FA_Regular, lineHeight)) {
         m_messenger->emitWarning(fmt::format("Font_BRepFont is null for '{}'", fontName));
         return {};
     }
@@ -1237,16 +1237,29 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_MTEXT& mtext)
     const gp_Dir extDir = toOccDir(mtext.extrusionDirection);
     const gp_Ax3 locText(pt, extDir, xAxisDir);
     Font_BRepTextBuilder brepTextBuilder;
-#if OCC_VERSION_HEX >= OCC_VERSION_CHECK(7, 5, 0)
+#if OCC_VERSION_HEX >= OCC_VERSION_CHECK(7, 5, 0)    
     auto textFormat = makeOccHandle<Font_TextFormatter>();
+
+    // Enable word wrapping only if text contains spaces or tabs
+    bool strHasSeparators = false;
+    for (int i = 0; i < occTextStr.Length() && !strHasSeparators; ++i) {
+        if (occTextStr.GetChar(i) == ' ' || occTextStr.GetChar(i) == 'x\09'/*tab*/)
+            strHasSeparators = true;
+    }
+
+    if (strHasSeparators) {
+        brepFont.FTFont()->RenderGlyph(U'M');
+        Font_Rect fontRect;
+        brepFont.FTFont()->GlyphRect(fontRect);
+        const double factor = fontRect.Height() / mtext.height;
+        textFormat->SetWrapping(float(mtext.referenceRectangleWidth * factor));
+#if OCC_VERSION_HEX >= OCC_VERSION_CHECK(7, 7, 0)
+        textFormat->SetWordWrapping(true);
+#endif
+    }
+
     textFormat->SetupAlignment(hAlign, vAlign);
     textFormat->Append(occTextStr, *brepFont.FTFont());
-    /* Font_TextFormatter computes weird ResultWidth() so wrapping is currently broken
-    if (text.acadHasColumnInfo && text.acadColumnInfo_Width > 0.) {
-        textFormat->SetWordWrapping(true);
-        textFormat->SetWrapping(text.acadColumnInfo_Width);
-    }
-    */
     textFormat->Format();
     return brepTextBuilder.Perform(brepFont, textFormat, locText);
 #else
@@ -1761,8 +1774,7 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_TEXT& text)
     // If rotation angle is non-null and x-axis direction defaults to standard Ox then set x-axis
     // so it matches rotation angle
     xAxisDir.Normalize();
-    if (!MathUtils::fuzzyIsNull(text.rotationAngle) && GeomUtils::equal(xAxisDir, gp::DX()))
-    {
+    if (!MathUtils::fuzzyIsNull(text.rotationAngle) && GeomUtils::equal(xAxisDir, gp::DX())) {
         const double angle = MathUtils::degreeToRadian(text.rotationAngle);
         const gp_Trsf trsf = GeomUtils::makeRotation(gp_Ax1(pt, gp::DZ()), angle);
         xAxisDir = gp::DX().Transformed(trsf);

@@ -446,6 +446,9 @@ bool DxfParser::parseMText()
     bool withinAcadColumns = false;
     bool withinAcadDefinedHeight = false;
     std::string strText;
+    // Code 101 in MTEXT is meant for non-standard "Embedded Object" which needs to be skipped until
+    // next Code 0(end of MTEXT entity declaration)
+    bool foundCode101 = false;
 
     auto fnMatchExtensionBegin = [=](std::string_view extName, bool& tag) {
         if (!tag && m_str == extName) {
@@ -474,6 +477,9 @@ bool DxfParser::parseMText()
         this->addEntity(std::move(text), m_mtexts);
     };
     auto fnCodeHandler = [&](int n) {
+        if (foundCode101)
+            return; // Skip
+
         if (fnMatchExtensionBegin("ACAD_MTEXT_COLUMN_INFO_BEGIN", withinAcadColumnInfo)) {
             text.acadHasColumnInfo = true;
             return; // Skip
@@ -564,7 +570,7 @@ bool DxfParser::parseMText()
             text.height = mm(stringToDouble(m_str));
             break;
         case 41:
-            text.referenceRectangleWidth = stringToDouble(m_str);
+            text.referenceRectangleWidth = mm(stringToDouble(m_str));
             break;
         case 44:
             text.lineSpacingFactor = stringToDouble(m_str);
@@ -583,6 +589,9 @@ bool DxfParser::parseMText()
             break;
         case 73:
             text.lineSpacingStyle = stringToUnsigned(m_str);
+            break;
+        case 101:
+            foundCode101 = true;
             break;
         default:
             this->handleCommonGroupCode(&text, n);
