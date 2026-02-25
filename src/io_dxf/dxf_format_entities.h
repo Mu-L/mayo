@@ -51,7 +51,7 @@ struct Dxf_TEXT : public Dxf_BaseGeom2dEntity {
     // Code: 50
     // AutoCad documentation doesn't specify units, but "Group Codes in Numerical Order" section
     // states that codes 50-58 are in degrees
-    double rotationAngle = 0.; // degress
+    double rotationAngle = 0.; // degrees
     // Code: 41
     // "This value is also adjusted when fit-type text is used"
     double relativeXScaleFactorWidth = 1.;
@@ -96,7 +96,7 @@ struct Dxf_MTEXT : public Dxf_BaseGeom2dEntity {
     // Percentage of default(3-on-5) line spacing to be applied. Valid values range from 0.25 to 4.0
     double lineSpacingFactor = 1.;
     // Code 50
-    double rotationAngle = 0.; // radians
+    double rotationAngle = 0.; // degrees
     // Code 71
     enum class AttachmentPoint {
         TopLeft = 1, TopCenter,    TopRight,
