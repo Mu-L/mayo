@@ -741,6 +741,7 @@ TopoDS_Shape DxfReader::ReaderImpl::createEntityShape(const Dxf_EntityVariant& e
 TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_3DFACE& face)
 {
     try {
+        // TODO Handle Dxf_3DFACE flags(eg InvisibleEdge1, InvisibleEdge2, ...)
         return makeFace(face);
     }
     catch (...) {
