@@ -272,6 +272,7 @@ public:
     TopoDS_Shape createShape(const Dxf_SOLID& solid);
     TopoDS_Shape createShape(const Dxf_SPLINE& spline);
     TopoDS_Shape createShape(const Dxf_TEXT& text);
+    TopoDS_Shape createShape(const Dxf_ATTRIB& attrib);
 
     std::string toUtf8(const std::string& strSource) const;
 
@@ -367,7 +368,8 @@ std::string getEntityName(const Dxf_EntityVariant& entityVar)
         [=](ConstRefWrap<Dxf_POLYLINE>) { return "POLYLINE"s; },
         [=](ConstRefWrap<Dxf_SOLID>) { return "SOLID"s; },
         [=](ConstRefWrap<Dxf_SPLINE>) { return "SPLINE"s; },
-        [=](ConstRefWrap<Dxf_TEXT>) { return "TEXT"s; }
+        [=](ConstRefWrap<Dxf_TEXT>) { return "TEXT"s; },
+        [=](ConstRefWrap<Dxf_ATTRIB>) { return "ATTRIB"s; }
         }, entityVar
     );
 }
@@ -733,7 +735,8 @@ TopoDS_Shape DxfReader::ReaderImpl::createEntityShape(const Dxf_EntityVariant& e
         [=](ConstRefWrap<Dxf_POLYLINE> obj) { return createShape(obj); },
         [=](ConstRefWrap<Dxf_SOLID> obj) { return createShape(obj); },
         [=](ConstRefWrap<Dxf_SPLINE> obj) { return createShape(obj); },
-        [=](ConstRefWrap<Dxf_TEXT> obj) { return createShape(obj); }
+        [=](ConstRefWrap<Dxf_TEXT> obj) { return createShape(obj); },
+        [=](ConstRefWrap<Dxf_ATTRIB> obj) { return createShape(obj); },
     }, entityVar);
     return entityShape;
 }
@@ -1786,6 +1789,11 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_TEXT& text)
     Font_BRepTextBuilder brepTextBuilder;
     const auto occTextStr = string_conv<NCollection_String>(this->toUtf8(std::string{text.str}));
     return brepTextBuilder.Perform(brepFont, occTextStr, locText, hAlign, vAlign);
+}
+
+TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_ATTRIB& attrib)
+{
+    return this->createShape(static_cast<const Dxf_TEXT&>(attrib));
 }
 
 void DxfReader::ReaderImpl::addShape(const TopoDS_Shape& shape, const Dxf_BaseEntity& srcEntity)

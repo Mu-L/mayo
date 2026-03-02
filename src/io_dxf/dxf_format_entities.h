@@ -10,6 +10,10 @@
 
 #include "dxf_format_common.h"
 
+// NOTE
+//   According AUTOCAD documentation "Group Codes in Numerical Order" section states that codes 50-58
+//   are expressed in degrees
+
 // Common group codes for entities
 struct Dxf_BaseEntity {
     // Code: 5
@@ -42,41 +46,65 @@ struct Dxf_POINT : public Dxf_BaseGeom2dEntity {
 };
 
 struct Dxf_TEXT : public Dxf_BaseGeom2dEntity {
-    // Code: 10, 20, 30
-    DxfCoords firstAlignmentPoint = {};
-    // Code: 40
-    double height = 0.;
     // Code: 1
     DxfStringRef str;
-    // Code: 50
-    // AutoCad documentation doesn't specify units, but "Group Codes in Numerical Order" section
-    // states that codes 50-58 are in degrees
-    double rotationAngle = 0.; // degrees
-    // Code: 41
-    // "This value is also adjusted when fit-type text is used"
-    double relativeXScaleFactorWidth = 1.;
-    // Code: 51
-    // AutoCad documentation doesn't specify units, but "Group Codes in Numerical Order" section
-    // states that codes 50-58 are in degrees
-    double obliqueAngle = 0.; // degrees
     // Code: 7  text style name(default=STANDARD)
     DxfStringRef styleName;
-    // Code: 71  (0: default, 2: backward(mirrored in X), 4: upside down(mirrored in Y)
+    // Code: 10, 20, 30
+    DxfCoords firstAlignmentPoint = {};  // OCS
+    // Code: 11, 21, 31
+    //   AUTOCAD doc: "This value is meaningful only if the value of a 72 or 73 group is nonzero (if
+    //   the justification is anything other than baseline/left)"
+    DxfCoords secondAlignmentPoint = {}; // OCS
+    // Code: 40
+    double height = 0.;
+    // Code: 41  (AUTOCAD doc: "This value is also adjusted when fit-type text is used")
+    double relativeXScaleFactorWidth = 1.;
+    // Code: 50
+    double rotationAngle = 0.; // degrees
+    // Code: 51
+    double obliqueAngle = 0.;  // degrees
+    // Code: 71  Text generation flags
+    //   0: default
+    //   2: text is backward(mirrored in X)
+    //   4: text is upside down(mirrored in Y)
     unsigned generationFlags = 0;
-
     // Code: 72
     enum class HorizontalJustification {
-        Left = 0, Center = 1, Right = 2, Aligned = 3, Middle = 4, Fit = 5
+        Left = 0, Center = 1, Right = 2,
+        Aligned = 3, // If vertical alignment == 0
+        Middle = 4,  // If vertical alignment == 0
+        Fit = 5      // If vertical alignment == 0
     };
     HorizontalJustification horizontalJustification = HorizontalJustification::Left;
-    // Code: 11, 21, 31
-    DxfCoords secondAlignmentPoint = {};
-
+    // Code: 73
     enum class VerticalJustification {
         Baseline = 0, Bottom = 1, Middle = 2, Top = 3
     };
-    // Code: 73
     VerticalJustification verticalJustification = VerticalJustification::Baseline;
+};
+
+struct Dxf_ATTRIB : public Dxf_TEXT {
+    // Code: 2  (AUTOCAD doc: "cannot contain spaces")
+    DxfStringRef tag;
+    // Code 70
+    //   1: attribute is invisible(does not appear)
+    //   2: this is a constant attribute
+    //   4: verification is required on input of this attribute
+    //   8: attribute is preset(no prompt during insertion)
+    unsigned flags = 0;
+    // Code 73  (AUTOCAD doc: "not currently used")
+    double fixedLength = 0.;
+    // Code 340
+    DxfStringRef mtextHandle;
+
+    // NOTE
+    //   Code: 10, 20, 30 "textStartPoint" -> same meaning as for Dxf_TEXT::firstAlignmentPoint
+    //   Code: 11, 21, 31 "alignmentPoint" -> same meaning as for Dxf_TEXT::secondAlignmentPoint
+    //   AUTOCAD doc: "Present only if 72 or 74 group is present and nonzero"
+
+    // NOTE
+    //   Code 74 is the same as TEXT code 73
 };
 
 struct Dxf_MTEXT : public Dxf_BaseGeom2dEntity {
@@ -114,7 +142,7 @@ struct Dxf_MTEXT : public Dxf_BaseGeom2dEntity {
     //     2: Exact(taller characters will not override)
     unsigned lineSpacingStyle = 0;
 
-    // NOTE AutoCad documentation states that codes 42, 43 are "read-only, ignored if supplied"
+    // NOTE AUTOCAD documentation states that codes 42, 43 are "read-only, ignored if supplied"
 
     // TODO Code 90(background fill setting)
     // TODO Code 420-429(background color, if RGB)

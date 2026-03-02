@@ -155,6 +155,7 @@ DxfParser::DxfParser()
     m_mapEntityHandler.insert({ "SPLINE", [=]{ return parseSpline(); } });
     m_mapEntityHandler.insert({ "STYLE", [=]{ return parseStyle(); } });
     m_mapEntityHandler.insert({ "TEXT", [=]{ return parseText(); } });
+    m_mapEntityHandler.insert({ "ATTRIB", [=]{ return parseAttrib(); } });
     m_mapEntityHandler.insert({ "TABLE", [=]{ return parseTable(); } });
     m_mapEntityHandler.insert({ "ENDSEC", [=]{ return parseEndSec(); } });
 }
@@ -601,6 +602,61 @@ bool DxfParser::parseMText()
     return this->parseEntity(fnEntityHandler, fnCodeHandler, "MText");
 }
 
+void DxfParser::handleDxfTextCode(Dxf_TEXT& text, int n)
+{
+    switch (n) {
+    case 10: case 20: case 30:
+        this->handleCoordCode(n, &text.firstAlignmentPoint);
+        break;
+    case 40:
+        text.height = mm(stringToDouble(m_str));
+        break;
+    case 1:
+        text.str = m_strCache.add(m_str);
+        break;
+    case 50:
+        text.rotationAngle = stringToDouble(m_str);
+        break;
+    case 41:
+        text.relativeXScaleFactorWidth = stringToDouble(m_str);
+        break;
+    case 51:
+        text.obliqueAngle = stringToDouble(m_str);
+        break;
+    case 7:
+        text.styleName = m_strCache.add(m_str);
+        break;
+    case 71:
+        text.generationFlags = stringToUnsigned(m_str);
+        break;
+    case 72: {
+        const int hjust = stringToInt(m_str);
+        if (hjust >= 0 && hjust <= 5)
+            text.horizontalJustification = static_cast<Dxf_TEXT::HorizontalJustification>(hjust);
+    }
+        break;
+    case 11: case 21: case 31:
+        this->handleCoordCode<11, 21, 31>(n, &text.secondAlignmentPoint);
+        break;
+    case 210: case 220: case 230:
+        this->handleCoordCode<210, 220, 230>(n, &text.extrusionDirection);
+        break;
+    case 73: case 74: {
+        // NOTE
+        //   Dxf_ATTRIB inherits Dxf_TEXT and code 73 has different meaning
+        //   ATTRIB code 73 is Dxf_ATTRIB::fixedLength which is of floating type
+        //   Use ReturnErrorValue error mode here
+        const int vjust = stringToInt(m_str, StringToErrorMode::ReturnErrorValue);
+        if (vjust >= 0 && vjust <= 3)
+            text.verticalJustification = static_cast<Dxf_TEXT::VerticalJustification>(vjust);
+    }
+        break;
+    default:
+        this->handleCommonGroupCode(&text, n);
+        break;
+    }
+}
+
 bool DxfParser::parseText()
 {
     Dxf_TEXT text;
@@ -608,55 +664,37 @@ bool DxfParser::parseText()
         this->addEntity(std::move(text), m_texts);
     };
     auto fnCodeHandler = [&](int n) {
+        this->handleDxfTextCode(text, n);
+    };
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Text");
+}
+
+bool DxfParser::parseAttrib()
+{
+    Dxf_ATTRIB attrib;
+    auto fnEntityHandler = [&]{
+        this->addEntity(std::move(attrib), m_attribs);
+    };
+    auto fnCodeHandler = [&](int n) {
         switch (n) {
-        case 10: case 20: case 30:
-            handleCoordCode(n, &text.firstAlignmentPoint);
+        case 2:
+            attrib.tag = m_strCache.add(m_str);
             break;
-        case 40:
-            text.height = mm(stringToDouble(m_str));
+        case 70:
+            attrib.flags = stringToUnsigned(m_str);
             break;
-        case 1:
-            text.str = m_strCache.add(m_str);
+        case 73:
+            attrib.fixedLength = mm(stringToDouble(m_str));
             break;
-        case 50:
-            text.rotationAngle = stringToDouble(m_str);
-            break;
-        case 41:
-            text.relativeXScaleFactorWidth = stringToDouble(m_str);
-            break;
-        case 51:
-            text.obliqueAngle = stringToDouble(m_str);
-            break;
-        case 7:
-            text.styleName = m_strCache.add(m_str);
-            break;
-        case 71:
-            text.generationFlags = stringToUnsigned(m_str);
-            break;
-        case 72: {
-            const int hjust = stringToInt(m_str);
-            if (hjust >= 0 && hjust <= 5)
-                text.horizontalJustification = static_cast<Dxf_TEXT::HorizontalJustification>(hjust);
-        }
-            break;
-        case 11: case 21: case 31:
-            this->handleCoordCode<11, 21, 31>(n, &text.secondAlignmentPoint);
-            break;
-        case 210: case 220: case 230:
-            this->handleCoordCode<210, 220, 230>(n, &text.extrusionDirection);
-            break;
-        case 73: {
-            const int vjust = stringToInt(m_str);
-            if (vjust >= 0 && vjust <= 3)
-                text.verticalJustification = static_cast<Dxf_TEXT::VerticalJustification>(vjust);
-        }
+        case 340:
+            attrib.mtextHandle = m_strCache.add(m_str);
             break;
         default:
-            this->handleCommonGroupCode(&text, n);
+            this->handleDxfTextCode(attrib, n);
             break;
         }
     };
-    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Text");
+    return this->parseEntity(fnEntityHandler, fnCodeHandler, "Attrib");
 }
 
 bool DxfParser::parseEllipse()
@@ -1408,8 +1446,9 @@ void DxfParser::parse(std::istream& stream)
     m_arcs.clear();
     m_circles.clear();
     m_ellipses.clear();
-    m_texts.clear();
     m_mtexts.clear();
+    m_texts.clear();
+    m_attribs.clear();
     m_lines.clear();
     m_lwpolylines.clear();
     m_polylines.clear();

@@ -73,6 +73,7 @@ private:
     bool parseLine();
     bool parseMText();
     bool parseText();
+    bool parseAttrib();
     bool parseArc();
     bool parseCircle();
     bool parseEllipse();
@@ -94,10 +95,10 @@ private:
     void parseHeaderVariable();
 
     template<unsigned XCode = 10, unsigned YCode = 20, unsigned ZCode = 30>
-    void handleCoordCode(int n, DxfCoords* coords);
+    void handleCoordCode(int n, DxfCoords* coords) const;
 
     template<unsigned XCode, unsigned YCode, unsigned ZCode>
-    void handleVectorCoordCode(int n, std::vector<DxfCoords>* ptrVecCoords);
+    void handleVectorCoordCode(int n, std::vector<DxfCoords>* ptrVecCoords) const;
 
     void handleCommonGroupCode(Dxf_BaseEntity* entity, int n);
     void handleCommonGroupCode(Dxf_BaseGeom2dEntity* entity, int n);
@@ -107,6 +108,8 @@ private:
     void reportError_readInteger(std::string_view context);
 
 private:
+    void handleDxfTextCode(Dxf_TEXT& text, int n);
+
     bool parseEntity(
         const std::function<void()>& fnEntityHandler,
         const std::function<void(int)>& fnCodeHandler,
@@ -130,8 +133,9 @@ private:
     std::deque<Dxf_ARC> m_arcs;
     std::deque<Dxf_CIRCLE> m_circles;
     std::deque<Dxf_ELLIPSE> m_ellipses;
-    std::deque<Dxf_TEXT> m_texts;
     std::deque<Dxf_MTEXT> m_mtexts;
+    std::deque<Dxf_TEXT> m_texts;
+    std::deque<Dxf_ATTRIB> m_attribs;
     std::deque<Dxf_LINE> m_lines;
     std::deque<Dxf_LWPOLYLINE> m_lwpolylines;
     std::deque<Dxf_POLYLINE> m_polylines;
@@ -178,7 +182,7 @@ unsigned stringToUnsigned(
 } // namespace DxfPrivate
 
 template<unsigned XCode, unsigned YCode, unsigned ZCode>
-void DxfParser::handleCoordCode(int n, DxfCoords* coords)
+void DxfParser::handleCoordCode(int n, DxfCoords* coords) const
 {
     switch (n) {
     case XCode:
@@ -194,7 +198,7 @@ void DxfParser::handleCoordCode(int n, DxfCoords* coords)
 }
 
 template<unsigned XCode, unsigned YCode, unsigned ZCode>
-void DxfParser::handleVectorCoordCode(int n, std::vector<DxfCoords>* ptrVecCoords)
+void DxfParser::handleVectorCoordCode(int n, std::vector<DxfCoords>* ptrVecCoords) const
 {
     if (n == XCode || ptrVecCoords->empty())
         ptrVecCoords->push_back({});
