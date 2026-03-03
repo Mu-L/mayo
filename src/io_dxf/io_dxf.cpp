@@ -102,6 +102,19 @@ const Enumeration& systemFontNames()
     return fontNames;
 }
 
+double computeStringWidth(const NCollection_String& str, Font_BRepFont& brepFont)
+{
+    double w = 0.;
+    for (auto it = str.Iterator(); it.Index() < str.Length(); ) {
+        const Standard_Utf32Char ch = *it;
+        ++it;
+        const Standard_Utf32Char chNext = (it.Index() < str.Length()) ? *it : 0;
+        w += brepFont.AdvanceX(ch, chNext);
+    }
+
+    return w;
+}
+
 gp_Pnt toOccPnt(const DxfCoords& coords)
 {
     return { coords.x, coords.y, coords.z };
@@ -1729,12 +1742,15 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_TEXT& text)
 
     const double fontHeight = 1.4 * text.height;
     Font_BRepFont brepFont;
-    brepFont.SetWidthScaling(static_cast<float>(text.relativeXScaleFactorWidth));
-    if (!brepFont.Init(fontName.c_str(), Font_FA_Regular, fontHeight/*, Font_StrictLevel_Aliases*/)) {
+    if (!brepFont.Init(fontName.c_str(), Font_FA_Regular, fontHeight)) {
         m_messenger->emitWarning(fmt::format("Font_BRepFont is null for '{}'", fontName));
         return {};
     }
 
+    const bool xMirror = (text.generationFlags & 0x02) != 0;
+    const bool yMirror = (text.generationFlags & 0x04) != 0;
+
+    const gp_Dir extDir = toOccDir(text.extrusionDirection);
     using DxfHJustification = Dxf_TEXT::HorizontalJustification;
     using DxfVJustification = Dxf_TEXT::VerticalJustification;
     // TEXT justification is subtle(eg baseline and fit modes)
@@ -1748,47 +1764,62 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_TEXT& text)
 
     const DxfVJustification vjust = text.verticalJustification;
     Graphic3d_VerticalTextAlignment vAlign = Graphic3d_VTA_TOP;
-    if (vjust == DxfVJustification::Baseline)
-        vAlign = Graphic3d_VTA_TOPFIRSTLINE;
-    else if (vjust == DxfVJustification::Bottom)
+    if (vjust == DxfVJustification::Baseline || vjust == DxfVJustification::Bottom)
         vAlign = Graphic3d_VTA_BOTTOM;
     else if (vjust == DxfVJustification::Middle)
         vAlign = Graphic3d_VTA_CENTER;
 
     // Alignment point
-    const bool applyFirstAlignPnt =
-        hjust == DxfHJustification::Left
-        || vjust == DxfVJustification::Baseline
+    const gp_Pnt alignPnt1 = toOccPnt(text.firstAlignmentPoint);
+    const gp_Pnt alignPnt2 = toOccPnt(text.secondAlignmentPoint);
+    const bool useFirstAlignPnt =
+        (hjust == DxfHJustification::Fit && !xMirror)
+        || (hjust == DxfHJustification::Aligned && !xMirror)
+        || (hjust == DxfHJustification::Left && vjust == DxfVJustification::Baseline)
     ;
+    const gp_Pnt pnt = useFirstAlignPnt ? alignPnt1 : alignPnt2;
 
-    const DxfCoords& alignPnt = applyFirstAlignPnt ? text.firstAlignmentPoint : text.secondAlignmentPoint;
-    const gp_Pnt pt = toOccPnt(alignPnt);
-
+    // X axis(firstAlignmentPoint ? secondAlignmentPoint)
     gp_Vec xAxisDir = gp::DX();
     if (hjust == DxfHJustification::Aligned || hjust == DxfHJustification::Fit) {
-        const gp_Pnt p1 = toOccPnt(text.firstAlignmentPoint);
-        const gp_Pnt p2 = toOccPnt(text.secondAlignmentPoint);
-        xAxisDir = gp_Vec{p1, p2};
-
+        xAxisDir = gp_Vec{alignPnt1, alignPnt2};
         // Ensure non-null x-axis direction
         if (GeomUtils::isNull(xAxisDir))
             xAxisDir = gp::DX();
     }
-
-    // If rotation angle is non-null and x-axis direction defaults to standard Ox then set x-axis
-    // so it matches rotation angle
-    xAxisDir.Normalize();
-    if (!MathUtils::fuzzyIsNull(text.rotationAngle) && GeomUtils::equal(xAxisDir, gp::DX())) {
+    else if (!MathUtils::fuzzyIsNull(text.rotationAngle) && GeomUtils::equal(xAxisDir, gp::DX())) {
+        // If rotation angle is non-null and x-axis direction defaults to standard Ox then
+        // set x-axis so it matches rotation angle
         const double angle = MathUtils::degreeToRadian(text.rotationAngle);
-        const gp_Trsf trsf = GeomUtils::makeRotation(gp_Ax1(pt, gp::DZ()), angle);
+        const gp_Trsf trsf = GeomUtils::makeRotation(gp_Ax1{pnt, extDir}, angle);
         xAxisDir = gp::DX().Transformed(trsf);
     }
 
-    const gp_Dir extDir = toOccDir(text.extrusionDirection);
-    const gp_Ax3 locText(pt, extDir, xAxisDir);
-    Font_BRepTextBuilder brepTextBuilder;
+    xAxisDir.Normalize();
+
     const auto occTextStr = string_conv<NCollection_String>(this->toUtf8(std::string{text.str}));
-    return brepTextBuilder.Perform(brepFont, occTextStr, locText, hAlign, vAlign);
+    double xScaleWidth = text.relativeXScaleFactorWidth;
+    if (hjust == DxfHJustification::Fit || hjust == DxfHJustification::Aligned) {
+        const double width = computeStringWidth(occTextStr, brepFont);
+        const double pntDist = alignPnt1.Distance(alignPnt2);
+        const double scale = !MathUtils::fuzzyIsNull(width) ? pntDist / width : pntDist;
+        if (hjust == DxfHJustification::Aligned)
+            brepFont.Init(fontName.c_str(), Font_FA_Regular, fontHeight * scale);
+        else
+            xScaleWidth = scale;
+    }
+
+    Font_BRepTextBuilder brepTextBuilder;
+    brepFont.SetWidthScaling(float(xScaleWidth));
+    const gp_Ax3 locText(pnt, extDir, xAxisDir);
+    TopoDS_Shape shape = brepTextBuilder.Perform(brepFont, occTextStr, locText, hAlign, vAlign);
+    if (xMirror)
+        shape.Move(GeomUtils::makeMirror(gp_Ax2{pnt, locText.XDirection()}));
+
+    if (yMirror)
+        shape.Move(GeomUtils::makeMirror(gp_Ax2{pnt, locText.YDirection()}));
+
+    return shape;
 }
 
 TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_ATTRIB& attrib)
