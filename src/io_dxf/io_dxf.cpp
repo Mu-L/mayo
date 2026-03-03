@@ -1222,17 +1222,18 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_MTEXT& mtext)
         return {};
     }
 
-    const int ap = static_cast<int>(mtext.attachmentPoint);
+    const auto ap = mtext.attachmentPoint;
+    using AttachPnt = Dxf_MTEXT::AttachmentPoint;
     Graphic3d_HorizontalTextAlignment hAlign = Graphic3d_HTA_LEFT;
-    if (ap == 2 || ap == 5 || ap == 8)
+    if (ap == AttachPnt::TopCenter || ap == AttachPnt::MiddleCenter || ap == AttachPnt::BottomCenter)
         hAlign = Graphic3d_HTA_CENTER;
-    else if (ap == 3 || ap == 6 || ap == 9)
+    else if (ap == AttachPnt::TopRight || ap == AttachPnt::MiddleRight || ap == AttachPnt::BottomRight)
         hAlign = Graphic3d_HTA_RIGHT;
 
     Graphic3d_VerticalTextAlignment vAlign = Graphic3d_VTA_TOP;
-    if (ap == 4 || ap == 5 || ap == 6)
+    if (ap == AttachPnt::MiddleLeft || ap == AttachPnt::MiddleCenter || ap == AttachPnt::MiddleRight)
         vAlign = Graphic3d_VTA_CENTER;
-    else if (ap == 7 || ap == 8 || ap == 9)
+    else if (ap == AttachPnt::BottomLeft || ap == AttachPnt::BottomCenter || ap == AttachPnt::BottomRight)
         vAlign = Graphic3d_VTA_BOTTOM;
 
     // Ensure non-null x-axis direction
@@ -1258,13 +1259,13 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_MTEXT& mtext)
     auto textFormat = makeOccHandle<Font_TextFormatter>();
 
     // Enable word wrapping only if text contains spaces or tabs
-    bool strHasSeparators = false;
-    for (int i = 0; i < occTextStr.Length() && !strHasSeparators; ++i) {
+    bool strHasWordSeparators = false;
+    for (int i = 0; i < occTextStr.Length() && !strHasWordSeparators; ++i) {
         if (occTextStr.GetChar(i) == ' ' || occTextStr.GetChar(i) == '\x09'/*tab*/)
-            strHasSeparators = true;
+            strHasWordSeparators = true;
     }
 
-    if (strHasSeparators) {
+    if (strHasWordSeparators) {
         brepFont.FTFont()->RenderGlyph(U'M');
         Font_Rect fontRect;
         brepFont.FTFont()->GlyphRect(fontRect);
@@ -1278,10 +1279,16 @@ TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_MTEXT& mtext)
     textFormat->SetupAlignment(hAlign, vAlign);
     textFormat->Append(occTextStr, *brepFont.FTFont());
     textFormat->Format();
-    return brepTextBuilder.Perform(brepFont, textFormat, locText);
+    TopoDS_Shape shape = brepTextBuilder.Perform(brepFont, textFormat, locText);
 #else
-    return brepTextBuilder.Perform(brepFont, occTextStr, locText, hAlign, vAlign);
+    TopoDS_Shape shape = brepTextBuilder.Perform(brepFont, occTextStr, locText, hAlign, vAlign);
 #endif
+
+    // Empirical correction, this makes the shape closer to what's expected(regarding ezdxf)
+    if (vAlign == Graphic3d_VTA_TOP)
+        shape.Move(GeomUtils::makeTranslation(gp_Vec{locText.YDirection()} * lineHeight * 0.18));
+
+    return shape;
 }
 
 TopoDS_Shape DxfReader::ReaderImpl::createShape(const Dxf_POINT& point)

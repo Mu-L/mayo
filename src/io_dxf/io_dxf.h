@@ -43,10 +43,6 @@ private:
     class Properties;
     class ReaderImpl;
 
-    struct Entity {
-        int aci = 0;
-        TopoDS_Shape shape;
-    };
     Parameters m_params;
     ReaderImpl* m_impl = nullptr;
 };

@@ -1239,8 +1239,9 @@ bool DxfParser::parseStyle()
         const int n = stringToInt(m_str, StringToErrorMode::ReturnErrorValue);
         if (n == 0) {
             if (style.name.empty()) {
-                this->reportError_readInteger("DXF::parseStyle() - no style name");
-                return false;
+                style.name = m_strCache.add("STANDARD");
+                //this->reportError("DXF::parseStyle() - no style name");
+                //return false;
             }
 
             m_styles.push_back(std::move(style));
@@ -1257,20 +1258,29 @@ bool DxfParser::parseStyle()
         case 2:
             style.name = m_strCache.add(m_str);
             break;
+        case 3:
+            style.primaryFontFileName = m_strCache.add(m_str);
+            break;
+        case 4:
+            style.bigFontFileName = m_strCache.add(m_str);
+            break;
         case 40:
             style.fixedTextHeight = mm(stringToDouble(m_str));
             break;
         case 41:
             style.widthFactor = stringToDouble(m_str);
             break;
+        case 42:
+            style.lastHeightUsed = stringToDouble(m_str);
+            break;
         case 50:
             style.obliqueAngle = stringToDouble(m_str);
             break;
-        case 3:
-            style.primaryFontFileName = m_strCache.add(m_str);
+        case 70:
+            style.standardFlags = stringToUnsigned(m_str);
             break;
-        case 4:
-            style.bigFontFileName = m_strCache.add(m_str);
+        case 71:
+            style.generationFlags = stringToUnsigned(m_str);
             break;
         default:
             break; // skip the next line
